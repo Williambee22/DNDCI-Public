@@ -12,11 +12,17 @@ function complete(corps, seed) {
     showTitle: 'Test Production',
     director: corps.ownerUsername,
     home: 'Austin, TX',
-    difficulty: 'normal',
     buff: 'Music GE',
   }, seed);
   game.applyAction(corps, 'office', { sponsor: 'arts', facility: 'office', foodBudget: 60 }, seed);
 }
+
+test('new corps use a $150,000 first-year budget and no game difficulty', () => {
+  const corps = game.createCorps('u1', 'Alpha', 'budget');
+  assert.equal(corps.budget, 150000);
+  assert.equal(corps.startingBudget, 150000);
+  assert.equal(Object.hasOwn(corps, 'difficulty'), false);
+});
 
 test('lobby gives each player an independent private corps', () => {
   const lobby = game.createLobby(user('u1', 'Alpha'), 'Test Lobby');
@@ -40,7 +46,8 @@ test('ready checklist and ten-week season work', () => {
   for (let week = 1; week <= 10; week += 1) {
     assert.equal(lobby.phase, 'choices');
     game.advanceSeason(lobby);
-    assert.ok(lobby.standings.length >= 18);
+    assert.equal(lobby.standings.length, 2);
+    assert.equal(lobby.standings.every(entry => entry.type === 'player'), true);
     if (week < 10) {
       assert.equal(lobby.phase, 'results');
       game.advanceSeason(lobby);
@@ -50,6 +57,23 @@ test('ready checklist and ten-week season work', () => {
   assert.equal(lobby.status, 'complete');
   assert.equal(lobby.history.length, 10);
   assert.equal(lobby.players.u1.corps.scoreHistory.length, 10);
+});
+
+test('fundraising is limited and higher interest increases the return', () => {
+  const base = game.createCorps('same-user', 'Alpha', 'fundraiser');
+  base.updatedAt = '2026-01-01T00:00:00.000Z';
+  const low = structuredClone(base);
+  const high = structuredClone(base);
+  low.interest = 5;
+  high.interest = 75;
+  game.applyAction(low, 'fundraise', { type: 'community' }, 'same-seed');
+  game.applyAction(high, 'fundraise', { type: 'community' }, 'same-seed');
+  assert.ok(high.fundraisingHistory[0].gross > low.fundraisingHistory[0].gross);
+  assert.ok(high.fundraisingHistory[0].successChance > low.fundraisingHistory[0].successChance);
+  assert.throws(() => game.applyAction(high, 'fundraise', { type: 'community' }, 'same-seed'), /already been used/);
+  game.applyAction(high, 'fundraise', { type: 'alumni' }, 'same-seed');
+  game.applyAction(high, 'fundraise', { type: 'corporate' }, 'same-seed');
+  assert.equal(high.fundraisingHistory.length, 3);
 });
 
 test('personalized lobby view does not expose another corps private state', () => {
