@@ -20,6 +20,14 @@ const store = new JsonStore(DATA_FILE);
 const sseClients = new Map();
 const loginAttempts = new Map();
 
+let upgradedSavedCorps = false;
+for (const lobby of Object.values(store.data.lobbies)) {
+  for (const player of Object.values(lobby.players || {})) {
+    if (game.normalizeCorps(player.corps, { season: lobby.season, status: lobby.status })) upgradedSavedCorps = true;
+  }
+}
+if (upgradedSavedCorps) store.save();
+
 function healthPayload() {
   return {
     ok: true,
@@ -249,6 +257,7 @@ async function handleApi(req, res, url) {
     return json(res, 200, {
       captions: game.CAPTIONS, buffs: game.VALID_BUFFS, staffRoles: game.STAFF_ROLES,
       staffLabels: game.STAFF_LABELS, facilities: game.FACILITIES, sectionTargets: game.SECTION_TARGETS,
+      fundraisers: game.FUNDRAISERS, startingBudget: game.STARTING_BUDGET, maxFundraisers: game.MAX_FUNDRAISERS,
       minPlayers: Number(process.env.MIN_PLAYERS || 2),
     });
   }
