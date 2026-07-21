@@ -25,16 +25,22 @@ const FACILITIES = {
   kitchen: { label: 'Food Program', cost: 2000 }, fleet: { label: 'Equipment Fleet', cost: 3600 },
   recruit: { label: 'Recruiting Network', cost: 2800 }, design: { label: 'Design Lab', cost: 3400 },
 };
-const CPU_CORPS = [
-  ['Blue Devils', 72.2, 96.2, 0.96], ['Bluecoats', 71.7, 95.7, 0.99],
-  ['Boston Crusaders', 71.2, 95.2, 1.02], ['Carolina Crown', 69.8, 94.0, 1.01],
-  ['Phantom Regiment', 68.9, 93.2, 1.03], ['Santa Clara Vanguard', 68.1, 92.4, 1.04],
-  ['Mandarins', 67.8, 91.7, 1.06], ['The Cavaliers', 66.5, 90.4, 1.0],
-  ['Blue Stars', 66.2, 90.0, 1.01], ['Troopers', 65.8, 89.6, 1.02],
-  ['Colts', 65.4, 88.9, 1.04], ['Madison Scouts', 65.8, 89.2, 1.05],
-  ['Blue Knights', 64.9, 88.4, 1.02], ['Crossmen', 64.2, 86.9, 1.01],
-  ['Pacific Crest', 63.9, 86.4, 1.04], ['Spirit of Atlanta', 63.5, 86.2, 1.03],
-];
+const STARTING_BUDGET = 150000;
+const MAX_FUNDRAISERS = 3;
+const FUNDRAISERS = {
+  community: {
+    label: 'Community Donation Drive', cost: 750, base: 4200, perInterest: 115,
+    spread: 3200, baseChance: 0.60, interestChance: 0.0032, fallback: 1100,
+  },
+  alumni: {
+    label: 'Alumni & Booster Gala', cost: 2000, base: 7000, perInterest: 190,
+    spread: 6500, baseChance: 0.46, interestChance: 0.0042, fallback: 1800,
+  },
+  corporate: {
+    label: 'Corporate Partnership Campaign', cost: 4500, base: 10500, perInterest: 285,
+    spread: 10500, baseChance: 0.28, interestChance: 0.0058, fallback: 2600,
+  },
+};
 
 function clamp(n, min, max) { return Math.max(min, Math.min(max, Number(n))); }
 function round2(n) { return Math.round(Number(n) * 100) / 100; }
@@ -92,8 +98,8 @@ function createCorps(userId, username, seed = '') {
     director: username,
     buff: 'Music GE',
     home: 'Dallas, TX',
-    difficulty: 'normal',
-    budget: 62000,
+    startingBudget: STARTING_BUDGET,
+    budget: STARTING_BUDGET,
     sponsor: null,
     facilities: {},
     foodBudget: 50,
@@ -105,6 +111,7 @@ function createCorps(userId, username, seed = '') {
       guard: { count: 0, talent: 0, movement: 0 },
     },
     auditionCamps: 0,
+    fundraisingHistory: [],
     routeStrategy: null,
     trainingBlocks: 0,
     morale: 70,
@@ -124,6 +131,59 @@ function createCorps(userId, username, seed = '') {
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
+}
+
+function normalizeCorps(corps, context = {}) {
+  if (!corps || typeof corps !== 'object') return false;
+  let changed = false;
+  const oldStartingBudget = !Number.isFinite(Number(corps.startingBudget));
+
+  if (Object.hasOwn(corps, 'difficulty')) {
+    delete corps.difficulty;
+    changed = true;
+  }
+  if (oldStartingBudget) {
+    corps.startingBudget = STARTING_BUDGET;
+    // Upgrade unstarted first-year saves from the old $62,000 base without erasing prior spending.
+    if (context.season === 1 && context.status === 'setup' && !corps.startingBudgetMigrationApplied) {
+      corps.budget = round2(Number(corps.budget || 0) + (STARTING_BUDGET - 62000));
+      corps.startingBudgetMigrationApplied = true;
+    }
+    changed = true;
+  }
+  if (!Array.isArray(corps.fundraisingHistory)) {
+    corps.fundraisingHistory = [];
+    changed = true;
+  }
+  return changed;
+}
+
+function fundraiserChance(corps, definition) {
+  const interest = clamp(corps.interest || 0, 0, 100);
+  const reputation = clamp(corps.reputation || 0, 0, 100);
+  return clamp(definition.baseChance + interest * definition.interestChance + reputation * 0.0012, 0.20, 0.97);
+}
+
+function fundraiserOptions(corps) {
+  normalizeCorps(corps);
+  const used = new Set(corps.fundraisingHistory.map(entry => entry.type));
+  const interest = clamp(corps.interest || 0, 0, 100);
+  const reputation = clamp(corps.reputation || 0, 0, 100);
+  const fanBoost = clamp(Math.log10(Math.max(100, corps.fans || 100)) - 2, 0, 4) * 350;
+
+  return Object.entries(FUNDRAISERS).map(([id, definition]) => {
+    const successChance = fundraiserChance(corps, definition);
+    const typicalGross = definition.base + interest * definition.perInterest + definition.spread * 0.5 + reputation * 28 + fanBoost;
+    const fallbackGross = definition.fallback + interest * definition.perInterest * 0.22 + fanBoost * 0.2;
+    return {
+      id,
+      label: definition.label,
+      cost: definition.cost,
+      used: used.has(id),
+      successChance: round2(successChance * 100),
+      estimatedNet: round2((successChance * typicalGross + (1 - successChance) * fallbackGross) - definition.cost),
+    };
+  });
 }
 
 function addLog(corps, message) {
@@ -184,6 +244,7 @@ function boostGroup(corps, group, amount) {
 
 function applyAction(corps, action, payload = {}, contextSeed = '') {
   if (!corps) throw new Error('Corps not found.');
+  normalizeCorps(corps);
   const rng = rngFromSeed(`${contextSeed}:${corps.ownerUserId}:${action}:${corps.updatedAt}:${corps.log.length}`);
 
   switch (action) {
@@ -192,7 +253,6 @@ function applyAction(corps, action, payload = {}, contextSeed = '') {
       corps.showTitle = safeText(payload.showTitle, 70);
       corps.director = safeText(payload.director, 50) || corps.ownerUsername;
       corps.home = safeText(payload.home, 60) || corps.home;
-      corps.difficulty = ['easy', 'normal', 'hard'].includes(payload.difficulty) ? payload.difficulty : corps.difficulty;
       corps.buff = VALID_BUFFS.includes(payload.buff) ? payload.buff : corps.buff;
       addLog(corps, 'Corps identity and competitive buff updated.');
       break;
@@ -238,7 +298,7 @@ function applyAction(corps, action, payload = {}, contextSeed = '') {
       const designQuality = (corps.staff.program?.quality || 35) + (corps.staff.music?.quality || 35) + (corps.staff.drill?.quality || 35);
       const gain = clamp(designQuality / 650, 0.12, 0.38);
       boostGroup(corps, focus === 'balanced' ? 'all' : focus, gain);
-      addLog(corps, `Designed a ${focus} production with difficulty ${difficulty}.`);
+      addLog(corps, `Designed a ${focus} production with complexity ${difficulty}.`);
       break;
     }
     case 'audition': {
@@ -263,6 +323,38 @@ function applyAction(corps, action, payload = {}, contextSeed = '') {
       corps.interest = round2(clamp(corps.interest + 2.5 + rng() * 2, 0, 100));
       corps.fans += 80 + Math.round(rng() * 120);
       addLog(corps, `Completed whole-corps audition camp ${corps.auditionCamps} of 4.`);
+      break;
+    }
+    case 'fundraise': {
+      const type = String(payload.type || '');
+      const definition = FUNDRAISERS[type];
+      if (!definition) throw new Error('Invalid fundraising option.');
+      if (corps.fundraisingHistory.length >= MAX_FUNDRAISERS) throw new Error('All three preseason fundraising campaigns are already complete.');
+      if (corps.fundraisingHistory.some(entry => entry.type === type)) throw new Error('That fundraising option has already been used this preseason.');
+
+      spend(corps, definition.cost);
+      const interest = clamp(corps.interest || 0, 0, 100);
+      const reputation = clamp(corps.reputation || 0, 0, 100);
+      const fanBoost = clamp(Math.log10(Math.max(100, corps.fans || 100)) - 2, 0, 4) * 350;
+      const successChance = fundraiserChance(corps, definition);
+      const succeeded = rng() < successChance;
+      let gross;
+      if (succeeded) {
+        gross = definition.base + interest * definition.perInterest + rng() * definition.spread + reputation * 28 + fanBoost;
+      } else {
+        gross = definition.fallback + interest * definition.perInterest * 0.22 + rng() * definition.spread * 0.12 + fanBoost * 0.2;
+      }
+      gross = round2(Math.max(0, gross));
+      corps.budget = round2(corps.budget + gross);
+      const net = round2(gross - definition.cost);
+      corps.fundraisingHistory.push({
+        type, label: definition.label, cost: definition.cost, gross, net,
+        interestAtTime: round2(interest), successChance: round2(successChance * 100),
+        succeeded, createdAt: nowIso(),
+      });
+      corps.interest = round2(clamp(corps.interest + (succeeded ? 1.1 : 0.35), 0, 100));
+      corps.fans += succeeded ? 120 + Math.round(rng() * 180) : 35 + Math.round(rng() * 60);
+      addLog(corps, `${definition.label} ${succeeded ? 'succeeded' : 'underperformed'}: raised ${gross.toFixed(0)} gross (${net >= 0 ? '+' : ''}${net.toFixed(0)} net).`);
       break;
     }
     case 'route': {
@@ -516,13 +608,6 @@ function weeklyIncrement(corps, lobby, week) {
   corps.injury = round2(clamp(corps.injury + (rng() < corps.burnout / 500 ? 1.5 + rng() * 2 : -0.3), 0, 100));
 }
 
-function cpuScore(lobby, week, cpu) {
-  const [name, start, ceiling, growth] = cpu;
-  const rng = rngFromSeed(`${lobby.id}:${lobby.season}:${week}:${name}:cpu`);
-  const progress = clamp(week / 10, 0, 1);
-  const seasonShift = ((lobby.season - 1) % 5 - 2) * 0.12;
-  return round2(start + (ceiling - start) * Math.pow(progress, growth) + seasonShift + (rng() - 0.5) * 0.7);
-}
 
 function scoreWeek(lobby) {
   if (lobby.status !== 'running' || lobby.phase !== 'choices') throw new Error('The lobby is not ready to score this week.');
@@ -542,8 +627,6 @@ function scoreWeek(lobby) {
       score, penalty, captions: totals, eventNote: corps.log[0]?.split(' — ').slice(1).join(' — ') || '',
     });
   }
-  for (const cpu of CPU_CORPS) entries.push({ type: 'cpu', corpsName: cpu[0], showTitle: 'CPU Production', score: cpuScore(lobby, week, cpu), penalty: 0 });
-
   entries.sort((a, b) => b.score - a.score || a.corpsName.localeCompare(b.corpsName));
   entries.forEach((entry, index) => { entry.placement = index + 1; });
 
@@ -647,6 +730,7 @@ function addPlayerToLobby(lobby, user) {
 }
 
 function publicPlayer(player) {
+  normalizeCorps(player.corps);
   return {
     userId: player.userId, username: player.username, ready: player.ready,
     corpsName: player.corps.corpsName, showTitle: player.corps.showTitle,
@@ -673,6 +757,7 @@ function lobbyView(lobby, userId) {
     })),
     me: {
       ready: membership.ready,
+      fundraisingOptions: fundraiserOptions(membership.corps),
       checklist: readyChecklist(membership.corps),
       setupComplete: isCorpsReady(membership.corps),
       corps: membership.corps,
@@ -683,7 +768,8 @@ function lobbyView(lobby, userId) {
 
 module.exports = {
   CAPTIONS, VALID_BUFFS, STAFF_ROLES, STAFF_LABELS, FACILITIES, SECTION_TARGETS,
+  STARTING_BUDGET, MAX_FUNDRAISERS, FUNDRAISERS,
   createLobby, addPlayerToLobby, createCorps, applyAction, readyChecklist, isCorpsReady,
   readyNeeded, startSeason, advanceSeason, chooseEvent, captionTotals, lobbyView, ordinal,
-  clamp, safeText,
+  clamp, safeText, normalizeCorps, fundraiserOptions,
 };
