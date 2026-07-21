@@ -1,0 +1,15 @@
+{
+  "name": "drum-corps-online",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Server-authoritative multiplayer drum corps tycoon and weekly DND-style season game.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check storage.js && node --check game-engine.js && node --check public/app.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20 <23"
+  }
+}
