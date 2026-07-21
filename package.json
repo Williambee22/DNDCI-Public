@@ -1,6 +1,6 @@
 {
   "name": "drum-corps-online",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Server-authoritative multiplayer drum corps tycoon and weekly DND-style season game.",
   "main": "server.js",
