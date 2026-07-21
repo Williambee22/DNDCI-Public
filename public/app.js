@@ -310,6 +310,7 @@ function renderPrivateStats() {
       ${statBox('Burnout', number(corps.burnout))}
       ${statBox('Injury', number(corps.injury))}
       ${statBox('Fans', Math.round(corps.fans).toLocaleString())}
+      ${statBox('Interest', number(corps.interest))}
       ${statBox('Reputation', number(corps.reputation))}
       ${statBox('Legacy', number(corps.legacy))}
     </div>
@@ -346,6 +347,15 @@ function renderStages() {
   }).join('');
   const facilities = Object.entries(state.meta.facilities).map(([key, facility]) => `<option value="${key}">${escapeHtml(facility.label)} — ${money(facility.cost)}</option>`).join('');
   const sectionRows = Object.entries(corps.sections).map(([key, section]) => `<div class="stat-row"><span>${escapeHtml(labelize(key))}</span><b>${section.count}/${state.meta.sectionTargets[key]} • talent ${number(section.talent)} • move ${number(section.movement)}</b></div>`).join('');
+  const fundraisingHistory = corps.fundraisingHistory || [];
+  const fundraisingOptions = lobby.me.fundraisingOptions || [];
+  const fundraisingButtons = fundraisingOptions.map(option => `
+    <div class="staff-card ${option.used ? 'hired' : ''}">
+      <b>${escapeHtml(option.label)}</b>
+      <div class="tiny muted">Cost ${money(option.cost)} • ${number(option.successChance, 0)}% projected success</div>
+      <div class="tiny">Estimated average net: <b>${money(option.estimatedNet)}</b></div>
+      <button class="secondary wide" data-game-action="fundraise" data-fundraiser="${escapeHtml(option.id)}" type="button" ${option.used || fundraisingHistory.length >= state.meta.maxFundraisers ? 'disabled' : ''}>${option.used ? 'Already used' : 'Run fundraiser'}</button>
+    </div>`).join('');
 
   $('#setupStages').innerHTML = `
     <article class="stage-card ${c.identity ? 'complete' : ''}">
@@ -356,7 +366,6 @@ function renderStages() {
         <div><label>Director</label><input name="director" maxlength="50" value="${escapeHtml(corps.director)}" required></div>
         <div><label>Home base</label><input name="home" maxlength="60" value="${escapeHtml(corps.home)}" required></div>
         <div><label>Caption buff</label><select name="buff">${options(state.meta.buffs, corps.buff)}</select></div>
-        <div><label>Difficulty</label><select name="difficulty">${options(['easy', 'normal', 'hard'], corps.difficulty)}</select></div>
       </div><button class="primary wide" type="submit">Save identity</button></form>
     </article>
 
@@ -378,7 +387,7 @@ function renderStages() {
       <div class="stage-heading"><h3><span class="stage-number">4</span>Design</h3><span>${c.design ? '✓ Complete' : 'Required'}</span></div>
       <form data-stage-form="design"><div class="form-grid three">
         <div><label>Concept</label><input name="concept" maxlength="80" value="${escapeHtml(corps.design?.concept || corps.showTitle)}"></div>
-        <div><label>Book difficulty</label><input name="bookDifficulty" type="number" min="35" max="95" value="${corps.design?.difficulty || 65}"></div>
+        <div><label>Book complexity</label><input name="bookDifficulty" type="number" min="35" max="95" value="${corps.design?.difficulty || 65}"></div>
         <div><label>Primary focus</label><select name="focus">${options(['balanced', 'ge', 'visual', 'music'], corps.design?.focus || 'balanced')}</select></div>
       </div><button class="primary wide" type="submit">Build production</button></form>
     </article>
@@ -389,21 +398,28 @@ function renderStages() {
       <button class="primary wide" data-game-action="audition" type="button" ${c.recruit ? 'disabled' : ''}>Run whole-corps audition camp</button>
     </article>
 
+    <article class="stage-card">
+      <div class="stage-heading"><h3><span class="stage-number">6</span>Fundraising</h3><span>${fundraisingHistory.length}/${state.meta.maxFundraisers} campaigns</span></div>
+      <p class="muted tiny">Optional. Higher corps interest raises both the success chance and expected donation amount. Audition camps build interest, so waiting can improve the return. Each campaign type can be used once.</p>
+      <div class="staff-grid">${fundraisingButtons}</div>
+      ${fundraisingHistory.length ? `<div class="tiny muted">Raised so far: ${money(fundraisingHistory.reduce((sum, entry) => sum + Number(entry.gross || 0), 0))} gross • ${money(fundraisingHistory.reduce((sum, entry) => sum + Number(entry.net || 0), 0))} net</div>` : ''}
+    </article>
+
     <article class="stage-card ${c.route ? 'complete' : ''}">
-      <div class="stage-heading"><h3><span class="stage-number">6</span>Tour plan</h3><span>${c.route ? `✓ ${escapeHtml(corps.routeStrategy)}` : 'Required'}</span></div>
+      <div class="stage-heading"><h3><span class="stage-number">7</span>Tour plan</h3><span>${c.route ? `✓ ${escapeHtml(corps.routeStrategy)}` : 'Required'}</span></div>
       <p class="muted tiny">Rest improves health, aggressive touring builds fans but creates fatigue, and balanced touring splits the difference.</p>
       <div class="button-grid"><button class="secondary" data-game-action="route" data-strategy="rest" type="button">Rest-focused</button><button class="primary" data-game-action="route" data-strategy="balanced" type="button">Balanced</button><button class="warning" data-game-action="route" data-strategy="aggressive" type="button">Aggressive</button></div>
     </article>
 
     <article class="stage-card ${c.training ? 'complete' : ''}">
-      <div class="stage-heading"><h3><span class="stage-number">7</span>Training</h3><span>${corps.trainingBlocks}/8 blocks</span></div>
+      <div class="stage-heading"><h3><span class="stage-number">8</span>Training</h3><span>${corps.trainingBlocks}/8 blocks</span></div>
       <div class="progress"><span style="width:${Math.min(100, corps.trainingBlocks / 8 * 100)}%"></span></div>
       <div class="button-grid">${['ge', 'visual', 'music', 'brass', 'percussion', 'guard', 'all'].map(focus => `<button class="secondary" data-game-action="train" data-focus="${focus}" type="button" ${c.training ? 'disabled' : ''}>${escapeHtml(labelize(focus))}</button>`).join('')}</div>
       <div class="button-grid">${['ge', 'visual', 'music'].map(focus => `<button class="warning" data-game-action="train" data-focus="${focus}" data-intense="1" type="button" ${c.training ? 'disabled' : ''}>Intense ${escapeHtml(labelize(focus))}</button>`).join('')}</div>
     </article>
 
     <article class="stage-card ${lobby.me.setupComplete ? 'complete' : ''}">
-      <div class="stage-heading"><h3><span class="stage-number">8</span>Finish preseason</h3><span>${lobby.me.setupComplete ? '✓ Ready eligible' : 'Incomplete'}</span></div>
+      <div class="stage-heading"><h3><span class="stage-number">9</span>Finish preseason</h3><span>${lobby.me.setupComplete ? '✓ Ready eligible' : 'Incomplete'}</span></div>
       <p class="muted">Quick Build fills a balanced, playable setup. It is useful for testing or for directors who do not want to configure every stage manually.</p>
       <button class="secondary wide" data-game-action="quickBuild" type="button">Quick Build remaining preseason</button>
     </article>`;
@@ -456,6 +472,7 @@ async function handleStageClick(event) {
     const role = button.dataset.role;
     payload = { role, level: Number(document.querySelector(`[data-staff-level="${role}"]`).value) };
   }
+  if (action === 'fundraise') payload = { type: button.dataset.fundraiser };
   if (action === 'route') payload = { strategy: button.dataset.strategy };
   if (action === 'train') payload = { focus: button.dataset.focus, intense: button.dataset.intense === '1' };
   await postAction(action, payload);
