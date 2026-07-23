@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A multiplayer drum corps management and season simulation game.">
+  <meta name="theme-color" content="#142d3d">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,500;0,600;0,700;0,800;0,900;1,600&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
+  <title>Drum Corps Online</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">Multiplayer corps management</div>
+      <h1>Drum Corps Online</h1>
+    </div>
+    <div id="sessionArea"></div>
+  </header>
+
+  <main>
+    <section id="notice" class="notice hidden" role="status"></section>
+
+    <section id="authScreen" class="auth-grid">
+      <article class="hero-card">
+        <div class="eyebrow">Tycoon + D&amp;D season engine</div>
+        <h2>Build privately. Compete together.</h2>
+        <p>Each director controls a private budget, staff, show, roster, training camp, tour plan, and weekly decisions. The lobby shares only readiness, contests, standings, and history.</p>
+        <div class="feature-grid">
+          <div><b>Private dashboard</b><span>Only you see your detailed corps statistics.</span></div>
+          <div><b>Live lobby</b><span>Updates synchronize automatically for every player.</span></div>
+          <div><b>Ten-event tour</b><span>Every contest includes a shared situation and a private corps decision.</span></div>
+          <div><b>Persistent saves</b><span>Accounts, corps, lobbies, scores, and history survive restarts.</span></div>
+        </div>
+      </article>
+
+      <article class="auth-card">
+        <div class="tab-row">
+          <button id="loginTab" class="tab active" type="button">Log in</button>
+          <button id="registerTab" class="tab" type="button">Register</button>
+        </div>
+        <form id="authForm">
+          <input id="authMode" type="hidden" value="login">
+          <label for="username">Username</label>
+          <input id="username" name="username" autocomplete="username" minlength="3" maxlength="24" required>
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" minlength="8" required>
+          <button id="authSubmit" class="primary wide" type="submit">Log in</button>
+        </form>
+      </article>
+    </section>
+
+    <section id="dashboardScreen" class="hidden">
+      <div class="page-heading">
+        <div><div class="eyebrow">Season control center</div><h2>Your lobbies</h2></div>
+      </div>
+      <div class="dashboard-grid">
+        <article class="panel">
+          <h3>Create a lobby</h3>
+          <form id="createLobbyForm">
+            <label for="lobbyName">Lobby name</label>
+            <input id="lobbyName" maxlength="60" placeholder="Friday Night League">
+            <button class="primary wide" type="submit">Create lobby</button>
+          </form>
+        </article>
+        <article class="panel">
+          <h3>Join with a code</h3>
+          <form id="joinLobbyForm">
+            <label for="joinCode">Six-character lobby code</label>
+            <input id="joinCode" maxlength="6" autocomplete="off" placeholder="A1B2C3">
+            <button class="secondary wide" type="submit">Join lobby</button>
+          </form>
+        </article>
+      </div>
+      <div id="lobbyList" class="lobby-list"></div>
+    </section>
+
+    <section id="lobbyScreen" class="hidden">
+      <div class="lobby-heading">
+        <button id="backDashboard" class="ghost" type="button">← Lobbies</button>
+        <div>
+          <div id="lobbyKicker" class="eyebrow"></div>
+          <h2 id="lobbyTitle"></h2>
+        </div>
+        <div id="lobbyStatus" class="status-chip"></div>
+      </div>
+
+      <div class="game-layout">
+        <aside class="left-column">
+          <article class="panel sticky-panel">
+            <h3>Lobby</h3>
+            <div id="lobbyMeta"></div>
+            <div id="playerList"></div>
+            <div id="hostControls"></div>
+          </article>
+        </aside>
+
+        <section class="center-column">
+          <div id="privateEvent"></div>
+          <article class="panel private-panel">
+            <div class="section-heading">
+              <div><div class="eyebrow">Private director view</div><h3 id="corpsHeading">Your corps</h3></div>
+              <span class="privacy-badge">PRIVATE</span>
+            </div>
+            <div id="privateStats"></div>
+          </article>
+          <div id="setupStages"></div>
+          <article class="panel">
+            <h3>Private log</h3>
+            <div id="privateLog" class="log"></div>
+          </article>
+        </section>
+
+        <aside class="right-column">
+          <article class="panel sticky-panel">
+            <h3>Current standings</h3>
+            <div id="standings"></div>
+            <h3 class="spaced">Season history</h3>
+            <div id="history"></div>
+          </article>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    Server-authoritative multiplayer prototype. Keep secrets in environment variables, never in browser or bot source code.
+  </footer>
+</body>
+</html>
