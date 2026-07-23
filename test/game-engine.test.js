@@ -137,3 +137,76 @@ test('personalized lobby views expose only the requesting player private state',
   assert.equal(view.me.corps.ownerUserId, 'u1');
   assert.equal(view.me.revision, lobby.players.u1.corps.revision);
 });
+
+test('staff markets are randomized, role-specific, and can produce 99 OVR candidates', () => {
+  const corps = game.createCorps('u-market', 'Market', 'market-seed');
+  assert.equal(corps.staffMarket.length, game.STAFF_ROLES.length * 4);
+  assert.equal(corps.staffMarket.every(candidate => game.STAFF_ROLES.includes(candidate.role)), true);
+  assert.equal(corps.staffMarket.every(candidate => candidate.overall >= 45 && candidate.overall <= 99), true);
+  let found99 = corps.staffMarket.some(candidate => candidate.overall === 99);
+  for (let i = 0; i < 120 && !found99; i += 1) {
+    found99 = game.generateStaffMarket(`search-${i}`, 1, i).some(candidate => candidate.overall === 99);
+  }
+  assert.equal(found99, true);
+
+  const director = corps.staffMarket.find(candidate => candidate.role === 'director');
+  game.applyAction(corps, 'hireCandidate', { candidateId: director.id }, 'market', { actionId: 'hire-market', expectedRevision: corps.revision, season: 1 });
+  assert.equal(corps.staff.director.name, director.name);
+  assert.equal(corps.staff.director.paidSeason, 1);
+  game.applyAction(corps, 'fireStaff', { role: 'director' }, 'market', { actionId: 'fire-market', expectedRevision: corps.revision, season: 1 });
+  assert.equal(corps.staff.director, undefined);
+});
+
+test('larger fanbases produce stronger recruiting talent with the same random seed', () => {
+  const base = game.createCorps('u-fans', 'Fans', 'fans');
+  const low = structuredClone(base);
+  const high = structuredClone(base);
+  low.fans = 600;
+  high.fans = 100000;
+  low.updatedAt = high.updatedAt = '2026-01-01T00:00:00.000Z';
+  game.applyAction(low, 'auditions', {}, 'same-recruiting-seed');
+  game.applyAction(high, 'auditions', {}, 'same-recruiting-seed');
+  const lowTalent = Object.values(low.sections).reduce((sum, section) => sum + section.talent, 0) / 3;
+  const highTalent = Object.values(high.sections).reduce((sum, section) => sum + section.talent, 0) / 3;
+  assert.ok(highTalent > lowTalent);
+  assert.ok(game.fanRecruitingBonus(high) > game.fanRecruitingBonus(low));
+});
+
+test('a completed lobby can archive a full season and open another year with carryover', () => {
+  const lobby = game.createLobby(user('u1', 'Alpha'), 'Dynasty League');
+  game.addPlayerToLobby(lobby, user('u2', 'Bravo'));
+  complete(lobby.players.u1.corps, 'dynasty-one');
+  complete(lobby.players.u2.corps, 'dynasty-two');
+  lobby.players.u1.ready = true;
+  lobby.players.u2.ready = true;
+  game.startSeason(lobby);
+  for (let week = 1; week <= 10; week += 1) {
+    game.advanceSeason(lobby);
+    if (week < 10) game.advanceSeason(lobby);
+  }
+  const archive = game.createSeasonArchive(lobby);
+  assert.equal(archive.weeks.length, 10);
+  assert.equal(archive.players.length, 2);
+  assert.equal(archive.players[0].scores.length, 10);
+  assert.equal(archive.finalStandings.length, 2);
+
+  const alpha = lobby.players.u1.corps;
+  const carried = {
+    budget: alpha.budget,
+    fans: alpha.fans,
+    facilities: structuredClone(alpha.facilities),
+    staffNames: Object.fromEntries(Object.entries(alpha.staff).map(([role, person]) => [role, person.name])),
+  };
+  game.startNextSeason(lobby);
+  assert.equal(lobby.season, 2);
+  assert.equal(lobby.status, 'setup');
+  assert.equal(lobby.history.length, 0);
+  assert.equal(alpha.budget, carried.budget);
+  assert.equal(alpha.fans, carried.fans);
+  assert.deepEqual(alpha.facilities, carried.facilities);
+  assert.deepEqual(Object.fromEntries(Object.entries(alpha.staff).map(([role, person]) => [role, person.name])), carried.staffNames);
+  assert.equal(alpha.showTitle, '');
+  assert.equal(alpha.auditionsComplete, false);
+  assert.equal(alpha.staffMarketSeason, 2);
+  assert.equal(game.readyChecklist(alpha).staff, false);
+});
