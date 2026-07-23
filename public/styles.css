@@ -1,20 +1,20 @@
 :root {
-  --night: #111923;
-  --night-2: #090e14;
-  --cream: #0d131a;
-  --paper: #151e28;
-  --paper-2: #1d2834;
-  --ink: #edf1f4;
-  --muted: #9aa7b3;
-  --line: #34414f;
-  --brass: #d4ad62;
-  --brass-dark: #a37a35;
-  --coral: #d96b58;
-  --coral-dark: #ef8a76;
-  --sage: #6f9f7f;
-  --sage-soft: #20352b;
-  --sky: #6f8794;
-  --danger-soft: #3a211f;
+  --night: #0b1119;
+  --night-2: #05080d;
+  --cream: #080d13;
+  --paper: #101821;
+  --paper-2: #17212c;
+  --ink: #e7edf2;
+  --muted: #8f9aa5;
+  --line: #2a3643;
+  --brass: #c89f54;
+  --brass-dark: #8f682e;
+  --coral: #c85f50;
+  --coral-dark: #de7d6d;
+  --sage: #628f72;
+  --sage-soft: #172b22;
+  --sky: #637985;
+  --danger-soft: #2c1918;
   --display: "Barlow Condensed", "Arial Narrow", Impact, sans-serif;
   --body: "DM Sans", system-ui, sans-serif;
   --mono: "Courier New", monospace;
@@ -244,13 +244,13 @@ input, select {
   min-height: 44px;
   padding: 10px 12px;
   color: var(--ink);
-  background: #101821;
+  background: #0b121a;
   border: 0;
   border-bottom: 2px solid var(--line);
   border-radius: 0;
 }
-input:hover, select:hover { background: #18232e; border-bottom-color: var(--brass); }
-input:focus, select:focus { outline: 0; background: #1b2733; border-bottom-color: var(--coral); box-shadow: inset 4px 0 0 var(--coral); }
+input:hover, select:hover { background: #131d27; border-bottom-color: var(--brass); }
+input:focus, select:focus { outline: 0; background: #17232e; border-bottom-color: var(--coral); box-shadow: inset 4px 0 0 var(--coral); }
 
 .primary, .secondary, .ghost, .danger, .good, .warning {
   min-height: 42px;
@@ -264,7 +264,7 @@ input:focus, select:focus { outline: 0; background: #1b2733; border-bottom-color
 }
 .primary:hover, .secondary:hover, .ghost:hover, .danger:hover, .good:hover, .warning:hover { transform: translateY(-2px); }
 .primary { color: var(--ink); background: var(--night); box-shadow: inset 0 -3px 0 var(--night-2); }
-.primary:hover { background: #273949; }
+.primary:hover { background: #1b2b39; }
 .secondary { color: var(--ink); background: transparent; border-color: var(--line); }
 .secondary:hover { color: var(--ink); background: var(--night); }
 .ghost { color: inherit; background: transparent; border-color: currentColor; opacity: .82; }
@@ -477,20 +477,20 @@ h4 {
   gap: 5px;
   padding: 12px;
   color: var(--ink);
-  background: #18222d;
+  background: #101923;
   border: 1px solid var(--line);
   border-left: 5px solid var(--brass-dark);
   text-align: left;
   text-transform: none;
   letter-spacing: normal;
 }
-.plan-choice:hover, .event-option:hover { filter: none; background: #202c38; border-left-color: var(--coral); }
+.plan-choice:hover, .event-option:hover { filter: none; background: #17232e; border-left-color: var(--coral); }
 .plan-choice.selected, .event-option.selected { background: var(--sage-soft); border-color: var(--sage); border-left-color: var(--sage); }
 .plan-choice b, .event-option b { font: 800 17px/1.05 var(--display); letter-spacing: .035em; text-transform: uppercase; }
 .plan-choice span, .event-option span { color: #f0a18f; font-weight: 800; }
 .plan-choice small, .event-option small { color: var(--muted); font: 500 12px/1.35 var(--body); }
 .event-options-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.event-option { color: var(--ink); background: #17212b; border-left-color: var(--brass); }
+.event-option { color: var(--ink); background: #0f1821; border-left-color: var(--brass); }
 .event-option:disabled { opacity: .68; }
 .event-card .event-option small { color: var(--muted); }
 .event-card .event-option span { color: #f0a18f; }
@@ -574,3 +574,83 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .caption-table tbody tr:hover, .standings-table tbody tr:hover {
   background: rgba(212,173,98,.08);
 }
+
+
+/* Dark theme v2 — explicit surface overrides */
+html, body { background-color: #05080d; }
+body { background-image:
+  radial-gradient(circle at 15% 0%, rgba(200,159,84,.075), transparent 28rem),
+  radial-gradient(circle at 100% 25%, rgba(75,105,124,.085), transparent 30rem),
+  linear-gradient(rgba(255,255,255,.012) 1px, transparent 1px),
+  linear-gradient(90deg, rgba(255,255,255,.012) 1px, transparent 1px);
+  background-size: auto, auto, 28px 28px, 28px 28px;
+}
+main, #authScreen, #dashboardScreen, #lobbyScreen { color: var(--ink); }
+.hero-card, .auth-card, .panel, .stage-card, .lobby-card,
+.staff-card, .history-card, .details-block, .summary-card,
+.plan-choice, .event-option, .host-box, .empty {
+  background-color: var(--paper) !important;
+  color: var(--ink);
+}
+.auth-card, .panel, .stage-card, .lobby-card, .staff-card,
+.details-block, .plan-choice, .event-option {
+  border-color: var(--line) !important;
+  box-shadow: none;
+}
+input, select, textarea {
+  color: var(--ink) !important;
+  background: #0b121a !important;
+  border-color: var(--line) !important;
+}
+input:hover, select:hover, textarea:hover,
+input:focus, select:focus, textarea:focus { background: #111b25 !important; }
+caption, table, thead, tbody, tr, th, td { color: var(--ink); }
+.caption-table, .standings-table { background: #0d141d !important; }
+.caption-table th, .standings-table th { background: #090f16 !important; }
+.caption-table td, .standings-table td,
+.caption-table th, .standings-table th { border-color: #25313d !important; }
+.caption-table tbody tr:nth-child(even),
+.standings-table tbody tr:nth-child(even) { background: rgba(255,255,255,.018) !important; }
+.event-card { background: #6f3029 !important; }
+.event-card .event-option { background: #111922 !important; }
+.notice { background: #121b25; }
+.topbar, .budget-strip, .tour-banner, .log { background-color: #060b11; }
+footer { background: #05080d; }
+
+/* Multi-season archive and staff market */
+.career-panel{margin-top:28px}
+.recap-list{display:grid;gap:10px}
+.recap-card{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:16px;border:1px solid var(--line);background:#0d141e}
+.recap-card h4{margin:2px 0 4px;font-family:var(--display);font-size:24px;text-transform:uppercase}
+.recap-card p{margin:0;color:var(--muted)}
+.recap-layout{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:18px;align-items:start}
+.recap-main{display:grid;gap:18px}
+.recap-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.recap-hero{position:relative;overflow:hidden;background:linear-gradient(135deg,#111c2a,#182a3d);border-color:#38516b}
+.recap-hero::after{content:"";position:absolute;right:-70px;top:-90px;width:260px;height:260px;border:48px solid rgba(218,170,79,.13);border-radius:50%}
+.recap-hero h3{font-size:clamp(34px,5vw,66px);max-width:760px;margin:5px 0;position:relative;z-index:1}
+.recap-score{font-family:var(--display);font-size:clamp(55px,9vw,108px);line-height:.8;font-weight:900;color:var(--brass);position:relative;z-index:1}
+.recap-weeks{display:grid;gap:10px}
+.recap-week{border:1px solid var(--line);background:#0b121b}
+.recap-week summary{display:flex;justify-content:space-between;gap:15px;padding:14px 16px;cursor:pointer;font-family:var(--display);font-size:19px;font-weight:800;text-transform:uppercase}
+.recap-week[open] summary{border-bottom:1px solid var(--line);background:#111c28}
+.recap-event-line{padding:10px 14px 0}
+.recap-week table{margin:10px 14px 14px;width:calc(100% - 28px)}
+.personal-finish{display:grid;grid-template-columns:1fr auto;gap:5px 14px;padding:14px;background:#0a1119;border:1px solid var(--line);margin-bottom:14px}
+.personal-finish b{font-family:var(--display);font-size:28px;color:var(--brass)}
+.score-timeline{display:grid;gap:6px;margin:14px 0}
+.score-timeline>div{display:grid;grid-template-columns:1fr auto;gap:2px 12px;padding:9px 0;border-bottom:1px solid var(--line)}
+.score-timeline b{font-family:var(--display);font-size:20px;color:var(--ink)}
+.score-timeline small{grid-column:1/-1;color:var(--muted)}
+.staff-ovr{float:right;display:grid;place-items:center;min-width:52px;min-height:52px;border:1px solid #4c6075;background:#08101a;font-family:var(--display);font-size:26px;font-weight:900;color:var(--brass);line-height:.75}
+.staff-ovr small{display:block;font-family:var(--body);font-size:8px;letter-spacing:.12em;color:var(--muted)}
+.candidate-card{min-height:178px}
+.star-candidate{border-color:var(--brass);box-shadow:inset 0 0 0 1px rgba(218,170,79,.35)}
+.star-candidate::before{content:"ELITE MARKET";display:block;margin-bottom:8px;font-size:10px;font-weight:800;letter-spacing:.12em;color:var(--brass)}
+.vacancy{border-style:dashed;opacity:.7}
+.staff-market-heading{margin-top:20px}
+.market-tools{display:flex;justify-content:flex-end;margin-bottom:10px}
+.market-grid{max-height:620px;overflow:auto;padding-right:4px}
+.recap-table td:nth-child(4),.recap-table th:nth-child(4){text-align:right}
+@media(max-width:1050px){.recap-layout{grid-template-columns:1fr}.recap-side .sticky-panel{position:static}.recap-card{align-items:flex-start;flex-direction:column}.recap-card button{width:100%}}
+@media(max-width:650px){.recap-heading{grid-template-columns:1fr}.recap-actions{justify-content:stretch}.recap-actions button{flex:1}.recap-week summary{display:block}.recap-week summary b{display:block;margin-top:4px}.recap-table th:nth-child(3),.recap-table td:nth-child(3){display:none}}

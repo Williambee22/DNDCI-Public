@@ -4,12 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="A multiplayer drum corps management and season simulation game.">
-  <meta name="theme-color" content="#142d3d">
+  <meta name="theme-color" content="#070b11">
+  <meta name="color-scheme" content="dark">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,500;0,600;0,700;0,800;0,900;1,600&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
   <title>Drum Corps Online</title>
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=multiseason-20260723-1">
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -76,6 +77,11 @@
         </article>
       </div>
       <div id="lobbyList" class="lobby-list"></div>
+      <article class="panel career-panel">
+        <div class="section-heading"><div><div class="eyebrow">Permanent account archive</div><h3>Your season recaps</h3></div><span id="careerRecapCount" class="pill">0 saved</span></div>
+        <p class="muted">Completed seasons are saved to your account even if the original lobby is deleted.</p>
+        <div id="accountHistory" class="recap-list"></div>
+      </article>
     </section>
 
     <section id="lobbyScreen" class="hidden">
@@ -121,6 +127,24 @@
             <h3 class="spaced">Season history</h3>
             <div id="history"></div>
           </article>
+        </aside>
+      </div>
+    </section>
+
+    <section id="recapScreen" class="hidden">
+      <div class="lobby-heading recap-heading">
+        <button id="recapBack" class="ghost" type="button">← Back</button>
+        <div><div id="recapKicker" class="eyebrow">Season archive</div><h2 id="recapTitle">Season recap</h2></div>
+        <div class="recap-actions"><button id="downloadRecap" class="secondary" type="button">Save recap</button><button id="nextSeasonButton" class="primary hidden" type="button">Next season</button></div>
+      </div>
+      <div class="recap-layout">
+        <section class="recap-main">
+          <article id="recapHero" class="panel recap-hero"></article>
+          <article class="panel"><h3>Final standings</h3><div id="recapFinalStandings"></div></article>
+          <article class="panel"><h3>Full contest-by-contest recap</h3><div id="recapWeeks" class="recap-weeks"></div></article>
+        </section>
+        <aside class="recap-side">
+          <article class="panel sticky-panel"><h3>Your season</h3><div id="recapPersonal"></div></article>
         </aside>
       </div>
     </section>

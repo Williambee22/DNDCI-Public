@@ -8,12 +8,17 @@ const state = {
   currentLobbyId: null,
   stream: null,
   busy: false,
+  accountRecaps: [],
+  activeRecap: null,
+  recapFromLobby: false,
+  dismissedRecapId: null,
 };
 
 const $ = selector => document.querySelector(selector);
 const authScreen = $('#authScreen');
 const dashboardScreen = $('#dashboardScreen');
 const lobbyScreen = $('#lobbyScreen');
+const recapScreen = $('#recapScreen');
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, char => ({
@@ -53,7 +58,7 @@ function notice(message, kind = 'success') {
 }
 function hideNotice() { $('#notice').classList.add('hidden'); }
 function showOnly(screen) {
-  for (const item of [authScreen, dashboardScreen, lobbyScreen]) item.classList.add('hidden');
+  for (const item of [authScreen, dashboardScreen, lobbyScreen, recapScreen]) item.classList.add('hidden');
   screen.classList.remove('hidden');
 }
 function acceptLobby(nextLobby) {
@@ -97,6 +102,8 @@ function wireStaticEvents() {
   $('#privateEvent').addEventListener('click', handleEventChoice);
   $('#hostControls').addEventListener('click', handleHostControl);
   $('#playerList').addEventListener('click', handleReadyControl);
+  $('#accountHistory').addEventListener('click', handleAccountHistoryClick);
+  $('#recapScreen').addEventListener('click', handleRecapControl);
 }
 function setAuthMode(mode) {
   $('#authMode').value = mode;
@@ -130,9 +137,11 @@ async function showDashboard() {
   state.currentLobbyId = null; state.lobby = null;
   showOnly(dashboardScreen);
   try {
-    const payload = await api('/api/lobbies');
-    state.lobbies = payload.lobbies;
+    const [lobbyPayload, recapPayload] = await Promise.all([api('/api/lobbies'), api('/api/account/recaps')]);
+    state.lobbies = lobbyPayload.lobbies;
+    state.accountRecaps = recapPayload.recaps || [];
     renderLobbyList();
+    renderAccountHistory();
   } catch (error) { notice(error.message, 'error'); }
 }
 function renderLobbyList() {
@@ -148,6 +157,7 @@ function renderLobbyList() {
       <div class="meta-row"><span>Status</span><b>${escapeHtml(lobby.status)}</b></div>
       <div class="meta-row"><span>Season / week</span><b>${lobby.season} / ${lobby.week}</b></div>
       <div class="meta-row"><span>Players</span><b>${lobby.players}</b></div>
+      <div class="meta-row"><span>Saved seasons</span><b>${lobby.completedSeasons || 0}</b></div>
       <button class="primary wide" data-open-lobby="${lobby.id}" type="button">Open lobby</button>
       ${lobby.isHost ? `<button class="danger-link wide" data-delete-lobby="${lobby.id}" data-lobby-name="${escapeHtml(lobby.name)}" type="button">Delete lobby</button>` : ''}
     </article>`).join('');
@@ -158,6 +168,25 @@ async function handleLobbyListClick(event) {
   const deleteButton = event.target.closest('[data-delete-lobby]');
   if (deleteButton) await deleteLobby(deleteButton.dataset.deleteLobby, deleteButton.dataset.lobbyName);
 }
+function renderAccountHistory() {
+  const list = $('#accountHistory');
+  $('#careerRecapCount').textContent = `${state.accountRecaps.length} saved`;
+  if (!state.accountRecaps.length) {
+    list.innerHTML = '<div class="empty">Your completed seasons will appear here automatically.</div>';
+    return;
+  }
+  list.innerHTML = state.accountRecaps.map(recap => `
+    <article class="recap-card">
+      <div><div class="eyebrow">Season ${recap.season} • ${escapeHtml(recap.lobbyCode || '')}</div><h4>${escapeHtml(recap.lobbyName)}</h4><p>${escapeHtml(recap.myResult?.corpsName || 'Your corps')} • ${recap.myResult?.finalPlacement ? `${recap.myResult.finalPlacement} place` : 'Result saved'} • ${number(recap.myResult?.finalScore, 2)}</p></div>
+      <button class="secondary" data-account-recap="${recap.id}" type="button">View recap</button>
+    </article>`).join('');
+}
+async function handleAccountHistoryClick(event) {
+  const button = event.target.closest('[data-account-recap]');
+  if (!button) return;
+  await openRecap(button.dataset.accountRecap, false);
+}
+
 async function createLobby(event) {
   event.preventDefault();
   try {
@@ -177,7 +206,7 @@ async function joinLobby(event) {
   } catch (error) { notice(error.message, 'error'); }
 }
 async function deleteLobby(lobbyId, lobbyName = 'this lobby') {
-  if (!window.confirm(`Delete ${lobbyName}? This permanently removes the lobby and its season history for every player.`)) return;
+  if (!window.confirm(`Delete ${lobbyName}? This removes the live lobby. Completed season recaps already saved to player accounts will remain available.`)) return;
   try {
     await api(`/api/lobbies/${lobbyId}`, { method: 'DELETE' });
     if (state.currentLobbyId === lobbyId) await showDashboard();
@@ -197,6 +226,7 @@ async function openLobby(lobbyId) {
     acceptLobby(payload.lobby);
     renderLobby();
     openStream(lobbyId);
+    if (state.lobby.status === 'complete' && state.lobby.latestArchiveId && state.dismissedRecapId !== state.lobby.latestArchiveId) await openRecap(state.lobby.latestArchiveId, true);
   } catch (error) {
     notice(error.message, 'error');
     await showDashboard();
@@ -205,8 +235,12 @@ async function openLobby(lobbyId) {
 async function refreshLobby(silent = true) {
   if (!state.currentLobbyId) return;
   try {
+    const wasComplete = state.lobby?.status === 'complete';
     const payload = await api(`/api/lobbies/${state.currentLobbyId}`);
-    if (acceptLobby(payload.lobby)) renderLobby();
+    if (acceptLobby(payload.lobby)) {
+      renderLobby();
+      if (!wasComplete && state.lobby.status === 'complete' && state.lobby.latestArchiveId) await openRecap(state.lobby.latestArchiveId, true);
+    }
   } catch (error) {
     if (error.status === 404) { notice('This lobby was deleted.', 'error'); await showDashboard(); return; }
     if (!silent) notice(error.message, 'error');
@@ -267,7 +301,7 @@ function renderHostControls() {
   if (lobby.status === 'setup') controls = `<button class="primary wide" data-host-action="start" type="button">Start season</button><button class="secondary wide" data-host-action="force-start" type="button">Force start</button>`;
   else if (lobby.status === 'running' && lobby.phase === 'choices') controls = `<button class="primary wide" data-host-action="advance" type="button">Score ${escapeHtml(lobby.tourEvent?.schedule?.name || `week ${lobby.week}`)}</button><p class="tiny muted">Unanswered decisions use the safest default option.</p>`;
   else if (lobby.status === 'running' && lobby.phase === 'results') controls = `<button class="primary wide" data-host-action="advance" type="button">Open ${escapeHtml(state.meta.tourSchedule[lobby.week]?.name || `week ${lobby.week + 1}`)}</button>`;
-  else controls = '<p class="tiny muted">The season is complete. Results remain in history.</p>';
+  else controls = `<button class="secondary wide" data-host-action="recap" type="button">View full recap</button><button class="primary wide" data-host-action="next-season" type="button">Open season ${lobby.season + 1}</button>`;
   $('#hostControls').innerHTML = `<div class="host-box"><b>Host controls</b>${controls}<div class="danger-zone"><button class="danger-link wide" data-host-action="delete" type="button">Delete lobby</button></div></div>`;
 }
 function renderPrivateEvent() {
@@ -308,6 +342,7 @@ function renderPrivateStats() {
       ${statBox('Injury', number(corps.injury))}
       ${statBox('Interest', number(corps.interest))}
       ${statBox('Fans', Math.round(corps.fans).toLocaleString())}
+      ${statBox('Recruiting boost', `+${number(lobby.me.fanRecruitingBonus)} talent`)}
       ${statBox('Reputation', number(corps.reputation))}
     </div>
     <div class="budget-strip">
@@ -343,10 +378,15 @@ function renderStages() {
     <div class="staff-card ${item.used ? 'hired' : ''}"><b>${escapeHtml(item.label)}</b><div class="tiny muted">Cost ${money(item.cost)} • ${number(item.successChance, 0)}% success</div><div class="tiny">Expected net <b>${money(item.estimatedNet)}</b></div><button class="secondary wide" data-game-action="fundraise" data-fundraiser="${item.id}" type="button" ${item.used || state.busy ? 'disabled' : ''}>${item.used ? 'Used' : 'Run fundraiser'}</button></div>`).join('');
   const facilityCards = Object.entries(state.meta.facilities).map(([id, item]) => `
     <div class="staff-card ${corps.facilities[id] ? 'hired' : ''}"><b>${escapeHtml(item.label)}</b><div class="tiny muted">${money(item.cost)} • ${escapeHtml(item.note)}</div><button class="secondary wide" data-game-action="buyFacility" data-facility="${id}" type="button" ${corps.facilities[id] || state.busy ? 'disabled' : ''}>${corps.facilities[id] ? 'Owned' : 'Buy'}</button></div>`).join('');
-  const staffCards = state.meta.staffRoles.map(role => {
+  const currentStaffCards = state.meta.staffRoles.map(role => {
     const person = corps.staff[role];
-    if (person) return `<div class="staff-card hired"><b>${escapeHtml(state.meta.staffLabels[role])}</b><div class="tiny">${escapeHtml(state.meta.staffTiers[person.tier]?.label || person.tier)} • quality ${number(person.quality)} • ${money(person.salary)}</div></div>`;
-    return `<div class="staff-card"><b>${escapeHtml(state.meta.staffLabels[role])}</b><select data-staff-tier="${role}">${Object.entries(state.meta.staffTiers).map(([tier, item]) => `<option value="${tier}" ${tier === 'experienced' ? 'selected' : ''}>${escapeHtml(item.label)} — ${money(Math.round(state.meta.staffBaseSalaries[role] * item.multiplier / 100) * 100)}</option>`).join('')}</select><button class="secondary wide" data-game-action="hireStaff" data-role="${role}" type="button" ${state.busy ? 'disabled' : ''}>Hire</button></div>`;
+    if (!person) return `<div class="staff-card vacancy"><b>${escapeHtml(state.meta.staffLabels[role])}</b><div class="tiny muted">Position vacant</div></div>`;
+    const paid = Number(person.paidSeason) === Number(lobby.season);
+    return `<div class="staff-card hired"><div class="staff-ovr">${number(person.overall || person.quality, 0)}<small>OVR</small></div><b>${escapeHtml(person.name || state.meta.staffLabels[role])}</b><div class="tiny muted">${escapeHtml(state.meta.staffLabels[role])}</div><div class="tiny">${money(person.salary)} • ${paid ? 'Paid this season' : 'Renewal due'}</div><button class="danger-link wide" data-game-action="fireStaff" data-role="${role}" type="button" ${state.busy ? 'disabled' : ''}>Fire</button></div>`;
+  }).join('');
+  const marketCards = (corps.staffMarket || []).slice().sort((a, b) => state.meta.staffRoles.indexOf(a.role) - state.meta.staffRoles.indexOf(b.role) || b.overall - a.overall).map(candidate => {
+    const filled = Boolean(corps.staff[candidate.role]);
+    return `<div class="staff-card candidate-card ${candidate.overall >= 90 ? 'star-candidate' : ''}"><div class="staff-ovr">${candidate.overall}<small>OVR</small></div><b>${escapeHtml(candidate.name)}</b><div class="tiny muted">${escapeHtml(state.meta.staffLabels[candidate.role])}</div><div class="tiny">${money(candidate.salary)} • ${escapeHtml(candidate.specialty)}</div><button class="secondary wide" data-game-action="hireCandidate" data-candidate-id="${candidate.id}" type="button" ${filled || state.busy ? 'disabled' : ''}>${filled ? 'Position filled' : 'Hire candidate'}</button></div>`;
   }).join('');
   const sectionRows = Object.entries(corps.sections).map(([key, section]) => `<div class="stat-row"><span>${escapeHtml(labelize(key))}</span><b>${section.count}/${state.meta.sectionTargets[key]} • talent ${number(section.talent)} • movement ${number(section.movement)}</b></div>`).join('');
   const tourCards = Object.entries(state.meta.tourPlans).map(([id, item]) => {
@@ -372,16 +412,19 @@ function renderStages() {
     </article>
 
     <article class="stage-card ${checklist.staff ? 'complete' : ''}">
-      <div class="stage-heading"><h3><span class="stage-number">3</span>Core staff</h3><span>${Object.keys(corps.staff).filter(role => state.meta.staffRoles.includes(role)).length}/${state.meta.staffRoles.length} hired</span></div>
-      <p class="muted">Six roles cover administration, design, instruction, and tour operations. Salaries are paid once for the season.</p>
-      <div class="package-row">${Object.entries(state.meta.staffTiers).map(([tier, item]) => `<button class="plan-choice" data-game-action="hirePackage" data-tier="${tier}" type="button" ${checklist.staff || state.busy ? 'disabled' : ''}><b>${escapeHtml(item.label)} package</b><small>Hire every unfilled role at this tier</small></button>`).join('')}</div>
-      <div class="staff-grid">${staffCards}</div>
+      <div class="stage-heading"><h3><span class="stage-number">3</span>Staff office</h3><span>${checklist.staff ? '✓ Contracts complete' : 'Hiring required'}</span></div>
+      <p class="muted">Staff stay with the corps between seasons. Retained staff must be renewed each year; candidates are randomized privately and can reach 99 OVR. Their ratings directly affect their assigned captions and operations.</p>
+      ${lobby.me.staffRenewalCost > 0 ? `<div class="budget-callout"><b>Retained staff renewal: ${money(lobby.me.staffRenewalCost)}</b><button class="primary" data-game-action="renewStaff" type="button" ${state.busy ? 'disabled' : ''}>Renew retained staff</button></div>` : ''}
+      <h4>Current staff</h4><div class="staff-grid">${currentStaffCards}</div>
+      <div class="stage-heading staff-market-heading"><h4>Private candidate market</h4><span>${corps.staffMarketRefreshes || 0}/2 refreshes used</span></div>
+      <div class="market-tools"><button class="secondary" data-game-action="refreshStaffMarket" type="button" ${(corps.staffMarketRefreshes || 0) >= 2 || state.busy ? 'disabled' : ''}>Refresh market — ${money(state.meta.staffMarketRefreshCost)}</button></div>
+      <div class="staff-grid market-grid">${marketCards}</div>
     </article>
 
     <article class="stage-card ${checklist.program && checklist.members && checklist.training ? 'complete' : ''}">
       <div class="stage-heading"><h3><span class="stage-number">4</span>Show & members</h3><span>${checklist.training ? '✓ Complete' : 'Three one-time plans'}</span></div>
       ${corps.design ? `<div class="summary-card"><b>${escapeHtml(corps.design.concept)}</b><span>${corps.design.complexity} complexity • ${escapeHtml(corps.design.focus)} focus • ${money(corps.design.cost)}</span></div>` : `<form data-stage-form="design"><div class="form-grid"><div><label>Concept</label><input name="concept" value="${escapeHtml(corps.showTitle)}"></div><div><label>Complexity (40–90)</label><input type="number" name="complexity" min="40" max="90" value="65"></div><div><label>Focus</label><select name="focus"><option value="balanced">Balanced</option><option value="ge">GE</option><option value="visual">Visual</option><option value="music">Music</option></select></div></div><button class="primary" type="submit" ${state.busy ? 'disabled' : ''}>Design the show</button></form>`}
-      <h4>Audition season</h4>${sectionRows}<button class="primary wide" data-game-action="auditions" type="button" ${corps.auditionsComplete || state.busy ? 'disabled' : ''}>${corps.auditionsComplete ? 'Auditions complete' : 'Run the full audition season'}</button>
+      <h4>Audition season</h4><p class="tiny muted">Your ${Math.round(corps.fans).toLocaleString()} fans currently add +${number(lobby.me.fanRecruitingBonus)} talent to recruiting.</p>${sectionRows}<button class="primary wide" data-game-action="auditions" type="button" ${corps.auditionsComplete || state.busy ? 'disabled' : ''}>${corps.auditionsComplete ? 'Auditions complete' : 'Run the full audition season'}</button>
       <h4>Spring training</h4>${corps.trainingPlan ? `<div class="summary-card"><b>${escapeHtml(state.meta.trainingPlans[corps.trainingPlan.type]?.label || corps.trainingPlan.type)}</b><span>${escapeHtml(corps.trainingPlan.focus)} focus</span></div>` : `<form data-stage-form="training"><div class="form-grid"><div><label>Camp plan</label><select name="type">${selectOptions(state.meta.trainingPlans, 'balanced')}</select></div><div><label>Focus</label><select name="focus"><option value="all">Balanced</option><option value="ge">GE</option><option value="visual">Visual</option><option value="music">Music</option><option value="brass">Brass</option><option value="percussion">Percussion</option><option value="guard">Guard</option></select></div></div><button class="primary" type="submit" ${!corps.auditionsComplete || state.busy ? 'disabled' : ''}>Complete spring training</button></form>`}
     </article>
 
@@ -437,6 +480,8 @@ async function handleStageClick(event) {
   if (action === 'buyFacility') payload = { facility: button.dataset.facility };
   if (action === 'hireStaff') { const role = button.dataset.role; payload = { role, tier: document.querySelector(`[data-staff-tier="${role}"]`).value }; }
   if (action === 'hirePackage') payload = { tier: button.dataset.tier };
+  if (action === 'hireCandidate') payload = { candidateId: button.dataset.candidateId };
+  if (action === 'fireStaff') payload = { role: button.dataset.role };
   if (action === 'fundraise') payload = { type: button.dataset.fundraiser };
   if (action === 'route') payload = { plan: button.dataset.plan };
   await postAction(action, payload);
@@ -455,15 +500,84 @@ async function handleHostControl(event) {
   if (!button || state.busy) return;
   const action = button.dataset.hostAction;
   if (action === 'delete') return deleteLobby(state.currentLobbyId, state.lobby.name);
+  if (action === 'recap') return openRecap(state.lobby.latestArchiveId, true);
+  if (action === 'next-season') return beginNextSeason();
   state.busy = true;
   try {
     const endpoint = action === 'advance' ? 'advance' : 'start';
     const body = action === 'force-start' ? { force: true } : {};
     const response = await api(`/api/lobbies/${state.currentLobbyId}/${endpoint}`, { method: 'POST', body });
-    acceptLobby(response.lobby); renderLobby(); notice(action === 'advance' ? 'Season advanced.' : 'Season started.');
+    acceptLobby(response.lobby); renderLobby();
+    if (state.lobby.status === 'complete' && state.lobby.latestArchiveId) await openRecap(state.lobby.latestArchiveId, true);
+    notice(action === 'advance' ? 'Season advanced.' : 'Season started.');
   } catch (error) { if (error.payload?.lobby) acceptLobby(error.payload.lobby); notice(error.message, 'error'); }
-  finally { state.busy = false; renderLobby(); }
+  finally { state.busy = false; if (!recapScreen.classList.contains('hidden')) return; renderLobby(); }
 }
+async function openRecap(archiveId, fromLobby = false) {
+  if (!archiveId) return notice('No saved recap is available yet.', 'error');
+  try {
+    const payload = await api(`/api/account/recaps/${archiveId}`);
+    state.activeRecap = { ...payload, recap: payload.recap };
+    state.recapFromLobby = fromLobby;
+    renderRecapScreen();
+    showOnly(recapScreen);
+  } catch (error) { notice(error.message, 'error'); }
+}
+function renderRecapScreen() {
+  const recap = state.activeRecap?.recap;
+  const me = state.activeRecap?.myPlayer;
+  if (!recap) return;
+  $('#recapKicker').textContent = `${recap.lobbyName} • Season ${recap.season}`;
+  $('#recapTitle').textContent = recap.champion ? `${recap.champion.corpsName} wins Season ${recap.season}` : `Season ${recap.season} recap`;
+  $('#recapHero').innerHTML = `<div class="eyebrow">World Championship complete</div><h3>${escapeHtml(recap.champion?.corpsName || 'Season complete')}</h3><div class="recap-score">${number(recap.champion?.score, 2)}</div><p>${recap.playerIds.length} directors • 10 contests • Saved ${new Date(recap.completedAt).toLocaleDateString()}</p>`;
+  $('#recapFinalStandings').innerHTML = recapTable(recap.finalStandings || []);
+  $('#recapWeeks').innerHTML = (recap.weeks || []).map(week => `<details class="recap-week" ${week.week === 10 ? 'open' : ''}><summary><span>Week ${week.week}: ${escapeHtml(week.schedule?.name || 'Contest')}</span><b>${escapeHtml(week.standings?.[0]?.corpsName || '')} ${number(week.standings?.[0]?.score, 2)}</b></summary><div class="tiny muted recap-event-line">${escapeHtml(week.schedule?.city || '')} • ${escapeHtml(week.tourEvent?.title || 'Tour contest')}</div>${recapTable(week.standings || [])}</details>`).join('');
+  $('#recapPersonal').innerHTML = me ? `<div class="personal-finish"><span>Final placement</span><b>${me.finalPlacement || '—'}</b><span>Final score</span><b>${number(me.finalScore, 2)}</b></div><h4>${escapeHtml(me.corpsName)}</h4><p class="muted">${escapeHtml(me.showTitle || '')}</p><div class="score-timeline">${(me.scores || []).map(score => `<div><span>W${score.week} • ${escapeHtml(score.event?.schedule?.name || state.meta.tourSchedule[score.week - 1]?.name || 'Contest')}</span><b>${number(score.score, 2)}</b><small>${score.placement} of ${score.totalCompetitors}</small></div>`).join('')}</div><div class="stat-row"><span>Ending cash</span><b>${money(me.budgetEnd)}</b></div><div class="stat-row"><span>Fans</span><b>${Math.round(me.fans || 0).toLocaleString()}</b></div><div class="stat-row"><span>Legacy</span><b>${number(me.legacy)}</b></div>` : '<div class="empty">Your personal result was not found.</div>';
+  const next = $('#nextSeasonButton');
+  const canNext = Boolean(state.recapFromLobby && state.lobby?.isHost && state.lobby?.status === 'complete' && state.lobby?.latestArchiveId === recap.id);
+  next.classList.toggle('hidden', !canNext);
+  next.textContent = `Start season ${Number(recap.season) + 1}`;
+}
+function recapTable(rows) {
+  return `<table class="standings-table recap-table"><thead><tr><th>Place</th><th>Corps</th><th>Show</th><th>Score</th></tr></thead><tbody>${rows.map(row => `<tr class="${row.userId === state.user.id ? 'my-row' : ''}"><td>${row.placement}</td><td><b>${escapeHtml(row.corpsName)}</b></td><td>${escapeHtml(row.showTitle || '')}</td><td><b>${number(row.score, 2)}</b></td></tr>`).join('')}</tbody></table>`;
+}
+async function beginNextSeason() {
+  if (!state.currentLobbyId || state.busy) return;
+  if (!window.confirm(`Open season ${state.lobby.season + 1}? Scores and recaps will stay saved.`)) return;
+  state.busy = true;
+  try {
+    const response = await api(`/api/lobbies/${state.currentLobbyId}/next-season`, { method: 'POST', body: {} });
+    acceptLobby(response.lobby);
+    state.activeRecap = null;
+    state.dismissedRecapId = null;
+    showOnly(lobbyScreen);
+    renderLobby();
+    notice(`Season ${state.lobby.season} preseason is open.`);
+  } catch (error) { notice(error.message, 'error'); }
+  finally { state.busy = false; }
+}
+function downloadActiveRecap() {
+  const recap = state.activeRecap?.recap;
+  if (!recap) return;
+  const blob = new Blob([JSON.stringify(recap, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${recap.lobbyName.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-season-${recap.season}-recap.json`;
+  document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+}
+async function handleRecapControl(event) {
+  if (event.target.closest('#downloadRecap')) return downloadActiveRecap();
+  if (event.target.closest('#nextSeasonButton')) return beginNextSeason();
+  if (event.target.closest('#recapBack')) {
+    const recapId = state.activeRecap?.recap?.id;
+    if (state.recapFromLobby && state.lobby) {
+      state.dismissedRecapId = recapId;
+      showOnly(lobbyScreen); renderLobby();
+    } else await showDashboard();
+  }
+}
+
 async function handleEventChoice(event) {
   const button = event.target.closest('[data-event-id]');
   if (!button || state.busy) return;
