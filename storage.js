@@ -7,7 +7,7 @@ class JsonStore {
   constructor(filePath) {
     this.filePath = filePath;
     this.tmpPath = `${filePath}.tmp`;
-    this.data = { users: {}, usernames: {}, sessions: {}, lobbies: {} };
+    this.data = { users: {}, usernames: {}, sessions: {}, lobbies: {}, archives: {} };
     this.load();
   }
 
@@ -24,6 +24,7 @@ class JsonStore {
         usernames: parsed.usernames || {},
         sessions: parsed.sessions || {},
         lobbies: parsed.lobbies || {},
+        archives: parsed.archives || {},
       };
       this.pruneSessions();
     } catch (error) {

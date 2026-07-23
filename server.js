@@ -22,8 +22,15 @@ const loginAttempts = new Map();
 const lobbyLocks = new Map();
 
 let upgradedSavedData = false;
+store.data.archives ||= {};
+for (const user of Object.values(store.data.users)) {
+  if (!Array.isArray(user.archiveIds)) { user.archiveIds = []; upgradedSavedData = true; }
+}
 for (const lobby of Object.values(store.data.lobbies)) {
   if (game.normalizeLobby(lobby)) upgradedSavedData = true;
+  if (lobby.status === 'complete' && lobby.history?.length) {
+    if (persistSeasonArchive(lobby)) upgradedSavedData = true;
+  }
 }
 if (upgradedSavedData) store.save();
 
@@ -124,7 +131,34 @@ function createSession(userId) {
   store.save();
   return { token, expiresAt };
 }
-function userSafe(user) { return { id: user.id, username: user.username, createdAt: user.createdAt }; }
+function userSafe(user) { return { id: user.id, username: user.username, createdAt: user.createdAt, recapCount: (user.archiveIds || []).length }; }
+function archiveSummary(archive, userId) {
+  const player = archive.players?.find(item => item.userId === userId) || null;
+  return {
+    id: archive.id, lobbyId: archive.lobbyId, lobbyName: archive.lobbyName, lobbyCode: archive.lobbyCode,
+    season: archive.season, completedAt: archive.completedAt, champion: archive.champion,
+    playerCount: archive.playerIds?.length || 0,
+    myResult: player ? { corpsName: player.corpsName, showTitle: player.showTitle, finalScore: player.finalScore, finalPlacement: player.finalPlacement } : null,
+  };
+}
+function persistSeasonArchive(lobby) {
+  lobby.archiveIds ||= [];
+  const archiveId = `${lobby.id}-season-${lobby.season}`;
+  let changed = false;
+  if (!store.data.archives[archiveId]) {
+    store.data.archives[archiveId] = game.createSeasonArchive(lobby);
+    changed = true;
+  }
+  if (!lobby.archiveIds.includes(archiveId)) { lobby.archiveIds.push(archiveId); changed = true; }
+  for (const player of Object.values(lobby.players || {})) {
+    const account = store.data.users[player.userId];
+    if (!account) continue;
+    account.archiveIds ||= [];
+    if (!account.archiveIds.includes(archiveId)) { account.archiveIds.push(archiveId); changed = true; }
+  }
+  return changed;
+}
+
 
 function getLobbyForUser(lobbyId, user) {
   const lobby = store.data.lobbies[lobbyId];
@@ -201,7 +235,7 @@ function serveStatic(res, pathname) {
   res.writeHead(200, {
     'Content-Type': mime,
     'Content-Length': stat.size,
-    'Cache-Control': ext === '.html' ? 'no-store' : 'public, max-age=300',
+    'Cache-Control': ext === '.html' ? 'no-store' : 'no-cache, must-revalidate',
     'X-Content-Type-Options': 'nosniff',
     'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
   });
@@ -241,7 +275,7 @@ async function handleApi(req, res, url) {
     if (store.data.usernames[normalized]) return json(res, 409, { error: 'That username is already taken.' });
     const id = crypto.randomBytes(10).toString('hex');
     const pw = passwordHash(password);
-    const user = { id, username, normalizedUsername: normalized, passwordHash: pw.hash, passwordSalt: pw.salt, createdAt: new Date().toISOString() };
+    const user = { id, username, normalizedUsername: normalized, passwordHash: pw.hash, passwordSalt: pw.salt, archiveIds: [], createdAt: new Date().toISOString() };
     store.data.users[id] = user;
     store.data.usernames[normalized] = id;
     const session = createSession(id);
@@ -282,9 +316,26 @@ async function handleApi(req, res, url) {
       facilities: game.FACILITIES, sponsors: game.SPONSORS, foodPlans: game.FOOD_PLANS,
       tourPlans: game.TOUR_PLANS, trainingPlans: game.TRAINING_PLANS, tourSchedule: game.TOUR_SCHEDULE,
       sectionTargets: game.SECTION_TARGETS, fundraisers: game.FUNDRAISERS,
-      startingBudget: game.STARTING_BUDGET, maxFundraisers: game.MAX_FUNDRAISERS,
+      startingBudget: game.STARTING_BUDGET, maxFundraisers: game.MAX_FUNDRAISERS, staffMarketRefreshCost: game.STAFF_MARKET_REFRESH_COST,
       minPlayers: Number(process.env.MIN_PLAYERS || 2),
     });
+  }
+
+  if (method === 'GET' && pathname === '/api/account/recaps') {
+    user.archiveIds ||= [];
+    const recaps = user.archiveIds
+      .map(id => store.data.archives[id])
+      .filter(Boolean)
+      .sort((a, b) => Number(b.season) - Number(a.season) || String(b.completedAt).localeCompare(String(a.completedAt)))
+      .map(archive => archiveSummary(archive, user.id));
+    return json(res, 200, { recaps });
+  }
+
+  const accountRecapMatch = pathname.match(/^\/api\/account\/recaps\/([A-Za-z0-9-]+)$/);
+  if (method === 'GET' && accountRecapMatch) {
+    const archive = store.data.archives[accountRecapMatch[1]];
+    if (!archive || !(user.archiveIds || []).includes(archive.id)) return json(res, 404, { error: 'Season recap not found on this account.' });
+    return json(res, 200, { recap: archive, myPlayer: archive.players?.find(item => item.userId === user.id) || null });
   }
 
   if (method === 'GET' && pathname === '/api/lobbies') {
@@ -295,7 +346,7 @@ async function handleApi(req, res, url) {
         id: lobby.id, code: lobby.code, name: lobby.name, status: lobby.status,
         season: lobby.season, week: lobby.week, phase: lobby.phase,
         players: Object.keys(lobby.players).length, isHost: lobby.hostUserId === user.id,
-        updatedAt: lobby.updatedAt, revision: lobby.revision || 0,
+        updatedAt: lobby.updatedAt, revision: lobby.revision || 0, completedSeasons: (lobby.archiveIds || []).length,
       }));
     return json(res, 200, { lobbies });
   }
@@ -320,7 +371,20 @@ async function handleApi(req, res, url) {
     return json(res, 200, { lobby: game.lobbyView(lobby, user.id) });
   }
 
-  const match = pathname.match(/^\/api\/lobbies\/([a-f0-9]+)(?:\/(events|action|ready|start|advance|event-choice))?$/);
+  const lobbyRecapsMatch = pathname.match(/^\/api\/lobbies\/([a-f0-9]+)\/recaps(?:\/([A-Za-z0-9-]+))?$/);
+  if (method === 'GET' && lobbyRecapsMatch) {
+    const lobby = getLobbyForUser(lobbyRecapsMatch[1], user);
+    const archiveId = lobbyRecapsMatch[2] || null;
+    if (archiveId) {
+      const archive = store.data.archives[archiveId];
+      if (!archive || archive.lobbyId !== lobby.id || !(lobby.archiveIds || []).includes(archiveId)) return json(res, 404, { error: 'Season recap not found.' });
+      return json(res, 200, { recap: archive, myPlayer: archive.players?.find(item => item.userId === user.id) || null });
+    }
+    const recaps = (lobby.archiveIds || []).map(id => store.data.archives[id]).filter(Boolean).map(archive => archiveSummary(archive, user.id));
+    return json(res, 200, { recaps });
+  }
+
+  const match = pathname.match(/^\/api\/lobbies\/([a-f0-9]+)(?:\/(events|action|ready|start|advance|event-choice|next-season))?$/);
   if (match) {
     const lobbyId = match[1];
     const operation = match[2] || null;
@@ -352,7 +416,7 @@ async function handleApi(req, res, url) {
         const nextCorps = structuredClone(player.corps);
         try {
           game.applyAction(nextCorps, body.action, body.payload || {}, `${current.id}:${current.season}`, {
-            actionId: String(body.actionId || ''), expectedRevision: body.expectedRevision,
+            actionId: String(body.actionId || ''), expectedRevision: body.expectedRevision, season: current.season,
           });
         } catch (error) {
           if (error.code === 'REVISION_CONFLICT') return json(res, 409, { error: error.message, lobby: game.lobbyView(current, user.id) });
@@ -402,8 +466,22 @@ async function handleApi(req, res, url) {
         const current = getLobbyForUser(lobbyId, user);
         if (current.hostUserId !== user.id) return json(res, 403, { error: 'Only the lobby host can advance the season.' });
         game.advanceSeason(current);
+        if (current.status === 'complete') persistSeasonArchive(current);
         store.save();
         broadcastLobby(current.id, 'season');
+        return json(res, 200, { lobby: game.lobbyView(current, user.id) });
+      });
+    }
+
+    if (method === 'POST' && operation === 'next-season') {
+      return withLobbyLock(lobbyId, async () => {
+        const current = getLobbyForUser(lobbyId, user);
+        if (current.hostUserId !== user.id) return json(res, 403, { error: 'Only the lobby host can open the next season.' });
+        if (current.status !== 'complete') return json(res, 409, { error: 'The current season is not complete.' });
+        persistSeasonArchive(current);
+        game.startNextSeason(current);
+        store.save();
+        broadcastLobby(current.id, 'season', { season: current.season });
         return json(res, 200, { lobby: game.lobbyView(current, user.id) });
       });
     }

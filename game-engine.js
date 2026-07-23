@@ -119,9 +119,16 @@ const TOUR_EVENT_PUBLIC = {
 };
 const TOUR_EVENT_KEYS = Object.keys(TOUR_EVENT_PUBLIC);
 
+const STAFF_FIRST_NAMES = ['Avery', 'Morgan', 'Jordan', 'Casey', 'Riley', 'Cameron', 'Taylor', 'Parker', 'Quinn', 'Reese', 'Drew', 'Hayden', 'Rowan', 'Skyler', 'Emerson', 'Finley', 'Dakota', 'Logan', 'Micah', 'Sage'];
+const STAFF_LAST_NAMES = ['Ramirez', 'Chen', 'Mitchell', 'Patel', 'Brooks', 'Rivera', 'Morgan', 'Bennett', 'Price', 'Foster', 'Sullivan', 'Torres', 'Nguyen', 'Campbell', 'Reed', 'Murphy', 'Diaz', 'Kim', 'Howard', 'Bailey'];
+const STAFF_MARKET_SIZE_PER_ROLE = 4;
+const STAFF_MARKET_REFRESH_COST = 2000;
+
+
 function clamp(n, min, max) { return Math.max(min, Math.min(max, Number(n))); }
 function round2(n) { return Math.round(Number(n) * 100) / 100; }
 function round100(n) { return Math.round(Number(n) / 100) * 100; }
+function moneyText(n) { return `$${Math.round(Number(n) || 0).toLocaleString()}`; }
 function nowIso() { return new Date().toISOString(); }
 function randomId(bytes = 8) { return crypto.randomBytes(bytes).toString('hex'); }
 function seedNumber(text) {
@@ -226,6 +233,10 @@ function createCorps(userId, username, seed = '') {
     foodPlan: null,
     facilities: {},
     staff: {},
+    staffMarket: [],
+    staffMarketSeason: 1,
+    staffMarketRefreshes: 0,
+    currentSeason: 1,
     design: null,
     sections: {
       brass: { count: 0, talent: 0, movement: 0 },
@@ -255,6 +266,7 @@ function createCorps(userId, username, seed = '') {
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
+  corps.staffMarket = generateStaffMarket(`${seed}:${userId}`, 1, 0);
   recordMoney(corps, 0, `Opening budget: $${STARTING_BUDGET.toLocaleString()}`, 'opening');
   corps.ledger[0].balance = STARTING_BUDGET;
   return corps;
@@ -297,6 +309,13 @@ function normalizeCorps(corps, context = {}) {
     delete corps.design.difficulty;
     changed = true;
   }
+  corps.currentSeason = Number(corps.currentSeason || context.season || 1);
+  if (!Array.isArray(corps.staffMarket) || Number(corps.staffMarketSeason || 0) !== corps.currentSeason) {
+    corps.staffMarket = generateStaffMarket(`${corps.ownerUserId}:${corps.ownerUsername}`, corps.currentSeason, Number(corps.staffMarketRefreshes || 0));
+    corps.staffMarketSeason = corps.currentSeason;
+    changed = true;
+  }
+  if (!Number.isInteger(corps.staffMarketRefreshes)) { corps.staffMarketRefreshes = 0; changed = true; }
   corps.staff ||= {};
   if (!corps.staff.visual && corps.staff.guard) { corps.staff.visual = { ...corps.staff.guard, role: 'visual', label: STAFF_LABELS.visual }; changed = true; }
   for (const role of STAFF_ROLES) {
@@ -309,6 +328,9 @@ function normalizeCorps(corps, context = {}) {
       person.label = STAFF_LABELS[role];
       changed = true;
     }
+    if (!Number.isFinite(Number(person.overall))) { person.overall = round2(Number(person.quality || 60)); changed = true; }
+    if (!Number.isFinite(Number(person.quality))) { person.quality = Number(person.overall || 60); changed = true; }
+    if (!Number.isInteger(person.paidSeason)) { person.paidSeason = context.status === 'setup' ? corps.currentSeason : Math.max(1, corps.currentSeason - 1); changed = true; }
   }
   if (!Object.hasOwn(corps, 'lastEventResult')) { corps.lastEventResult = null; changed = true; }
   return changed;
@@ -321,7 +343,7 @@ function averageSection(corps, field) {
   const total = Math.max(1, totalMembers(corps));
   return Object.values(corps.sections || {}).reduce((sum, section) => sum + Number(section[field] || 0) * Number(section.count || 0), 0) / total;
 }
-function staffQuality(corps, role, fallback = 40) { return Number(corps.staff?.[role]?.quality || fallback); }
+function staffQuality(corps, role, fallback = 40) { return Number(corps.staff?.[role]?.overall || corps.staff?.[role]?.quality || fallback); }
 function staffAverage(corps) {
   const people = STAFF_ROLES.map(role => corps.staff?.[role]).filter(Boolean);
   if (!people.length) return 38;
@@ -331,12 +353,66 @@ function staffSalary(role, tier) {
   const definition = STAFF_TIERS[tier] || STAFF_TIERS.local;
   return round100(STAFF_BASE_SALARIES[role] * definition.multiplier);
 }
+function candidateSalary(role, overall) {
+  const base = STAFF_BASE_SALARIES[role] || 4000;
+  const multiplier = 0.72 + Math.pow(clamp((Number(overall) - 42) / 57, 0, 1), 1.35) * 3.05;
+  return round100(base * multiplier);
+}
+function generateStaffMarket(seed, season = 1, refresh = 0) {
+  const rng = rngFromSeed(`${seed}:staff-market:${season}:${refresh}`);
+  const market = [];
+  const usedNames = new Set();
+  for (const role of STAFF_ROLES) {
+    for (let slot = 0; slot < STAFF_MARKET_SIZE_PER_ROLE; slot += 1) {
+      let name = '';
+      for (let attempts = 0; attempts < 20 && (!name || usedNames.has(name)); attempts += 1) {
+        name = `${pick(rng, STAFF_FIRST_NAMES)} ${pick(rng, STAFF_LAST_NAMES)}`;
+      }
+      usedNames.add(name);
+      let overall;
+      const starRoll = rng();
+      if (starRoll < 0.012) overall = 99;
+      else if (starRoll < 0.07) overall = Math.round(90 + rng() * 8);
+      else overall = Math.round(46 + Math.pow(rng(), 0.82) * 45);
+      overall = clamp(overall, 45, 99);
+      market.push({
+        id: randomId(6), role, name, overall, quality: overall,
+        salary: candidateSalary(role, overall),
+        specialty: role === 'program' ? 'GE content and design ceiling'
+          : role === 'brass' ? 'Brass and music achievement'
+          : role === 'percussion' ? 'Percussion achievement'
+          : role === 'visual' ? 'Visual performance, analysis, and guard'
+          : role === 'tour' ? 'Travel cost, health, and burnout control'
+          : 'Fundraising, morale, and organizational stability',
+      });
+    }
+  }
+  return market;
+}
+function ensureStaffMarket(corps, season = corps.currentSeason || 1, seed = corps.ownerUserId) {
+  if (!Array.isArray(corps.staffMarket) || Number(corps.staffMarketSeason) !== Number(season)) {
+    corps.staffMarketRefreshes = 0;
+    corps.staffMarket = generateStaffMarket(`${seed}:${corps.ownerUserId}`, season, 0);
+    corps.staffMarketSeason = Number(season);
+  }
+  return corps.staffMarket;
+}
+function unpaidStaff(corps) {
+  return STAFF_ROLES.map(role => corps.staff?.[role]).filter(person => person && Number(person.paidSeason) !== Number(corps.currentSeason));
+}
+function retainedStaffRenewalCost(corps) {
+  return unpaidStaff(corps).reduce((sum, person) => sum + Number(person.salary || 0), 0);
+}
+function fanRecruitingBonus(corps) {
+  const fans = Math.max(600, Number(corps.fans || 600));
+  return round2(clamp(Math.log10(fans / 600 + 1) * 8.5, 0, 15));
+}
 function readyChecklist(corps) {
   normalizeCorps(corps);
   return {
     identity: Boolean(corps.corpsName && corps.showTitle && corps.director && VALID_BUFFS.includes(corps.buff)),
     finance: Boolean(corps.sponsor && FOOD_PLANS[corps.foodPlan]),
-    staff: STAFF_ROLES.every(role => Boolean(corps.staff[role])),
+    staff: STAFF_ROLES.every(role => Boolean(corps.staff[role]) && Number(corps.staff[role].paidSeason) === Number(corps.currentSeason)),
     program: Boolean(corps.design),
     members: Boolean(corps.auditionsComplete && rosterFull(corps)),
     training: Boolean(corps.trainingPlan),
@@ -441,14 +517,14 @@ function signFinancePlan(corps, sponsorId, foodPlanId) {
   corps.foodPlan = food;
   addLog(corps, `Finance plan saved: ${sponsor.label}, ${FOOD_PLANS[food].label}.`);
 }
-function hireRole(corps, role, tier, rng, charge = true) {
+function hireRole(corps, role, tier, rng, charge = true, season = corps.currentSeason || 1) {
   if (!STAFF_ROLES.includes(role)) throw new Error('Invalid staff role.');
   if (corps.staff[role]) throw new Error(`${STAFF_LABELS[role]} is already hired.`);
   const chosenTier = STAFF_TIERS[tier] ? tier : 'local';
   const salary = staffSalary(role, chosenTier);
   if (charge) spend(corps, salary, `${STAFF_LABELS[role]} season salary`);
-  const quality = round2(clamp(STAFF_TIERS[chosenTier].quality + (rng() - 0.5) * 7, 45, 92));
-  corps.staff[role] = { role, label: STAFF_LABELS[role], tier: chosenTier, quality, salary };
+  const overall = round2(clamp(STAFF_TIERS[chosenTier].quality + (rng() - 0.5) * 7, 45, 94));
+  corps.staff[role] = { id: randomId(6), name: `${pick(rng, STAFF_FIRST_NAMES)} ${pick(rng, STAFF_LAST_NAMES)}`, role, label: STAFF_LABELS[role], tier: chosenTier, overall, quality: overall, salary, paidSeason: Number(season) };
   return corps.staff[role];
 }
 function hirePackage(corps, tier, rng) {
@@ -457,7 +533,7 @@ function hirePackage(corps, tier, rng) {
   if (!missing.length) throw new Error('All core staff positions are already filled.');
   const total = missing.reduce((sum, role) => sum + staffSalary(role, chosenTier), 0);
   spend(corps, total, `${STAFF_TIERS[chosenTier].label} staff package`);
-  for (const role of missing) hireRole(corps, role, chosenTier, rng, false);
+  for (const role of missing) hireRole(corps, role, chosenTier, rng, false, corps.currentSeason || 1);
   addLog(corps, `Hired ${missing.length} staff members with the ${STAFF_TIERS[chosenTier].label.toLowerCase()} package.`);
 }
 function runDesign(corps, payload) {
@@ -478,17 +554,18 @@ function runAuditions(corps, rng) {
   spend(corps, cost, 'Audition season operations');
   const recruitBonus = corps.facilities.recruit ? 8 : 0;
   const interestBonus = clamp(corps.interest * 0.22, 0, 18);
+  const fanBonus = fanRecruitingBonus(corps);
   const homeBonus = /TX|Texas|Dallas|Austin|San Antonio/i.test(corps.home) ? 5 : 1;
   for (const [key, target] of Object.entries(SECTION_TARGETS)) {
     const roleBonus = key === 'brass' ? staffQuality(corps, 'brass') : key === 'percussion' ? staffQuality(corps, 'percussion') : staffQuality(corps, 'visual');
-    const talent = clamp(42 + recruitBonus + interestBonus + homeBonus + roleBonus * 0.16 + rng() * 10, 42, 91);
-    const movement = clamp(40 + recruitBonus + interestBonus * 0.5 + staffQuality(corps, 'visual') * 0.15 + rng() * 11, 40, 90);
+    const talent = clamp(42 + recruitBonus + interestBonus + fanBonus + homeBonus + roleBonus * 0.17 + rng() * 10, 42, 99);
+    const movement = clamp(40 + recruitBonus + interestBonus * 0.5 + fanBonus * 0.35 + staffQuality(corps, 'visual') * 0.16 + rng() * 11, 40, 97);
     corps.sections[key] = { count: target, talent: round2(talent), movement: round2(movement) };
   }
   corps.auditionsComplete = true;
   corps.interest = round2(clamp(corps.interest + 6 + rng() * 3, 0, 100));
   corps.fans += 350 + Math.round(rng() * 350);
-  addLog(corps, `Audition season completed with all ${Object.values(SECTION_TARGETS).reduce((a, b) => a + b, 0)} positions filled.`);
+  addLog(corps, `Audition season completed with all ${Object.values(SECTION_TARGETS).reduce((a, b) => a + b, 0)} positions filled. Fan support added ${fanBonus.toFixed(1)} recruiting points.`);
 }
 function runTraining(corps, payload, rng) {
   if (corps.trainingPlan) throw new Error('Spring training is already complete.');
@@ -514,6 +591,8 @@ function applyAction(corps, action, payload = {}, contextSeed = '', meta = {}) {
   if (!corps) throw new Error('Corps not found.');
   const check = checkPlayerMutation(corps, meta);
   if (check.duplicate) return { duplicate: true };
+  corps.currentSeason = Number(meta.season || corps.currentSeason || 1);
+  ensureStaffMarket(corps, corps.currentSeason, contextSeed);
   const rng = rngFromSeed(`${contextSeed}:${corps.ownerUserId}:${action}:${meta.actionId || corps.updatedAt}:${corps.revision}`);
 
   switch (action) {
@@ -551,6 +630,43 @@ function applyAction(corps, action, payload = {}, contextSeed = '', meta = {}) {
     case 'hirePackage':
       hirePackage(corps, String(payload.tier || 'experienced'), rng);
       break;
+    case 'hireCandidate': {
+      const candidateId = String(payload.candidateId || '');
+      const candidate = corps.staffMarket.find(item => item.id === candidateId);
+      if (!candidate) throw new Error('That staff candidate is no longer available.');
+      if (corps.staff[candidate.role]) throw new Error(`Fire the current ${STAFF_LABELS[candidate.role]} before hiring a replacement.`);
+      spend(corps, candidate.salary, `${candidate.name} — ${STAFF_LABELS[candidate.role]} season salary`);
+      corps.staff[candidate.role] = { ...candidate, label: STAFF_LABELS[candidate.role], tier: candidate.overall >= 90 ? 'elite' : candidate.overall >= 68 ? 'experienced' : 'local', paidSeason: corps.currentSeason };
+      corps.staffMarket = corps.staffMarket.filter(item => item.id !== candidateId);
+      addLog(corps, `Hired ${candidate.name} as ${STAFF_LABELS[candidate.role]} (${candidate.overall} OVR).`);
+      break;
+    }
+    case 'fireStaff': {
+      const role = String(payload.role || '');
+      if (!STAFF_ROLES.includes(role) || !corps.staff[role]) throw new Error('That staff position is not filled.');
+      const name = corps.staff[role].name || STAFF_LABELS[role];
+      delete corps.staff[role];
+      addLog(corps, `Released ${name} from the ${STAFF_LABELS[role]} position. Paid salary is not refunded.`);
+      break;
+    }
+    case 'renewStaff': {
+      const due = unpaidStaff(corps);
+      if (!due.length) throw new Error('Every retained staff member is already paid for this season.');
+      const total = due.reduce((sum, person) => sum + Number(person.salary || 0), 0);
+      spend(corps, total, `Season ${corps.currentSeason} retained staff renewals`);
+      for (const person of due) person.paidSeason = corps.currentSeason;
+      addLog(corps, `Renewed ${due.length} retained staff contracts for ${moneyText(total)}.`);
+      break;
+    }
+    case 'refreshStaffMarket': {
+      if (corps.staffMarketRefreshes >= 2) throw new Error('The staff market can only be refreshed twice per season.');
+      spend(corps, STAFF_MARKET_REFRESH_COST, 'National staff search and interview costs');
+      corps.staffMarketRefreshes += 1;
+      corps.staffMarket = generateStaffMarket(`${contextSeed}:${corps.ownerUserId}`, corps.currentSeason, corps.staffMarketRefreshes);
+      corps.staffMarketSeason = corps.currentSeason;
+      addLog(corps, `Refreshed the staff market (${corps.staffMarketRefreshes}/2).`);
+      break;
+    }
     case 'design':
       runDesign(corps, payload);
       break;
@@ -599,6 +715,7 @@ function applyAction(corps, action, payload = {}, contextSeed = '', meta = {}) {
       if (!corps.facilities.field && corps.budget >= FACILITIES.field.cost + 65000) { spend(corps, FACILITIES.field.cost, FACILITIES.field.label); corps.facilities.field = 1; }
       if (!corps.facilities.fleet && corps.budget >= FACILITIES.fleet.cost + 60000) { spend(corps, FACILITIES.fleet.cost, FACILITIES.fleet.label); corps.facilities.fleet = 1; }
       if (!STAFF_ROLES.every(role => corps.staff[role])) hirePackage(corps, corps.budget > 100000 ? 'experienced' : 'local', rng);
+      for (const role of STAFF_ROLES) if (corps.staff[role]) corps.staff[role].paidSeason = corps.currentSeason;
       corps.showTitle ||= 'Momentum in Motion';
       if (!corps.design) runDesign(corps, { concept: corps.showTitle, complexity: 62, focus: 'balanced' });
       if (!corps.auditionsComplete) runAuditions(corps, rng);
@@ -922,6 +1039,87 @@ function advanceSeason(lobby) {
   if (lobby.phase === 'results') { openNextWeek(lobby); return null; }
   throw new Error('The season cannot be advanced from its current phase.');
 }
+function createSeasonArchive(lobby) {
+  if (lobby.status !== 'complete' || !lobby.history?.length) throw new Error('The season is not complete.');
+  const finalStandings = structuredClone(lobby.standings || []);
+  const champion = finalStandings[0] ? { userId: finalStandings[0].userId, corpsName: finalStandings[0].corpsName, score: finalStandings[0].score } : null;
+  return {
+    id: `${lobby.id}-season-${lobby.season}`,
+    lobbyId: lobby.id,
+    lobbyCode: lobby.code,
+    lobbyName: lobby.name,
+    season: lobby.season,
+    completedAt: lobby.completedAt || nowIso(),
+    champion,
+    playerIds: Object.keys(lobby.players),
+    finalStandings,
+    weeks: structuredClone(lobby.history.filter(item => Number(item.season) === Number(lobby.season))),
+    players: Object.values(lobby.players).map(player => {
+      const corps = player.corps;
+      const scores = structuredClone((corps.scoreHistory || []).filter(item => Number(item.season) === Number(lobby.season)));
+      const final = scores.at(-1) || null;
+      return {
+        userId: player.userId, username: player.username, corpsName: corps.corpsName, showTitle: corps.showTitle,
+        finalScore: final?.score ?? corps.latestScore, finalPlacement: final?.placement ?? corps.latestPlacement,
+        scores, budgetEnd: corps.budget, fans: corps.fans, reputation: corps.reputation,
+        interest: corps.interest, legacy: corps.legacy, staff: structuredClone(corps.staff),
+      };
+    }),
+  };
+}
+function resetCorpsForNextSeason(corps, lobby, player) {
+  const nextSeason = lobby.season;
+  const rng = rngFromSeed(`${lobby.id}:${nextSeason}:${player.userId}:offseason`);
+  corps.currentSeason = nextSeason;
+  corps.startingBudget = corps.budget;
+  corps.showTitle = '';
+  corps.sponsor = null;
+  corps.design = null;
+  corps.sections = {
+    brass: { count: 0, talent: 0, movement: 0 }, percussion: { count: 0, talent: 0, movement: 0 }, guard: { count: 0, talent: 0, movement: 0 },
+  };
+  corps.auditionsComplete = false;
+  corps.fundraisingHistory = [];
+  corps.trainingPlan = null;
+  corps.pendingEvent = null;
+  corps.lastEventResult = null;
+  corps.latestScore = null;
+  corps.latestPlacement = null;
+  corps.modifiers = defaultModifiers();
+  corps.processedActionIds = [];
+  corps.staffMarketRefreshes = 0;
+  corps.staffMarketSeason = nextSeason;
+  corps.staffMarket = generateStaffMarket(`${lobby.id}:${player.userId}`, nextSeason, 0);
+  corps.morale = round2(clamp(68 + corps.morale * 0.15 + rng() * 4, 62, 82));
+  corps.burnout = round2(clamp(corps.burnout * 0.35, 0, 35));
+  corps.injury = round2(clamp(corps.injury * 0.45, 0, 30));
+  const legacyStart = clamp(corps.legacy / 160, 0, 0.28);
+  corps.captions = emptyCaptions(rng);
+  for (const [key] of CAPTIONS) boostCaption(corps, key, legacyStart, legacyStart * 0.75);
+  corps.revision = Number(corps.revision || 0) + 1;
+  addLog(corps, `Season ${nextSeason} preseason opened. Staff, facilities, cash, fans, reputation, and legacy carried forward.`);
+}
+function startNextSeason(lobby) {
+  if (lobby.status !== 'complete') throw new Error('Finish the current season before starting the next year.');
+  lobby.season += 1;
+  lobby.status = 'setup';
+  lobby.phase = 'setup';
+  lobby.week = 0;
+  lobby.standings = [];
+  lobby.history = [];
+  lobby.tourEvent = null;
+  lobby.startedAt = null;
+  lobby.completedAt = null;
+  for (const player of Object.values(lobby.players)) {
+    player.ready = false;
+    resetCorpsForNextSeason(player.corps, lobby, player);
+  }
+  lobby.updatedAt = nowIso();
+  lobby.revision = Number(lobby.revision || 0) + 1;
+  lobby.log.unshift(`${nowIso()} — Season ${lobby.season} preseason opened.`);
+  lobby.log = lobby.log.slice(0, 120);
+}
+
 function ordinal(n) {
   const mod100 = n % 100;
   if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
@@ -932,6 +1130,7 @@ function normalizeLobby(lobby) {
   let changed = false;
   if (!Number.isInteger(lobby.revision)) { lobby.revision = 0; changed = true; }
   if (!Object.hasOwn(lobby, 'tourEvent')) { lobby.tourEvent = null; changed = true; }
+  if (!Array.isArray(lobby.archiveIds)) { lobby.archiveIds = []; changed = true; }
   for (const player of Object.values(lobby.players || {})) if (normalizeCorps(player.corps, { season: lobby.season, status: lobby.status })) changed = true;
   return changed;
 }
@@ -941,7 +1140,7 @@ function createLobby(hostUser, name) {
   const lobby = {
     id, code, name: safeText(name, 60) || `${hostUser.username}'s Season`,
     hostUserId: hostUser.id, status: 'setup', season: 1, week: 0, phase: 'setup', revision: 0,
-    tourEvent: null, players: {}, standings: [], history: [], log: [], createdAt: nowIso(), updatedAt: nowIso(),
+    tourEvent: null, players: {}, standings: [], history: [], archiveIds: [], log: [], createdAt: nowIso(), updatedAt: nowIso(),
   };
   lobby.players[hostUser.id] = { userId: hostUser.id, username: hostUser.username, ready: false, corps: createCorps(hostUser.id, hostUser.username, id), joinedAt: nowIso() };
   return lobby;
@@ -974,6 +1173,7 @@ function lobbyView(lobby, userId) {
     isHost: lobby.hostUserId === userId, status: lobby.status, season: lobby.season,
     week: lobby.week, phase: lobby.phase, revision: lobby.revision,
     readyNeeded: readyNeeded(Object.keys(lobby.players).length),
+    archiveIds: [...(lobby.archiveIds || [])], latestArchiveId: (lobby.archiveIds || []).at(-1) || null,
     tourEvent: lobby.tourEvent,
     players: Object.values(lobby.players).map(publicPlayer),
     standings: lobby.standings.map(entry => ({ type: entry.type, userId: entry.userId || null, corpsName: entry.corpsName, showTitle: entry.showTitle, score: entry.score, penalty: entry.penalty, placement: entry.placement })),
@@ -988,6 +1188,8 @@ function lobbyView(lobby, userId) {
       revision: membership.corps.revision,
       fundraisingOptions: fundraiserOptions(membership.corps),
       budgetSummary: budgetSummary(membership.corps),
+      fanRecruitingBonus: fanRecruitingBonus(membership.corps),
+      staffRenewalCost: retainedStaffRenewalCost(membership.corps),
       checklist: readyChecklist(membership.corps),
       setupComplete: isCorpsReady(membership.corps),
       corps: membership.corps,
@@ -999,8 +1201,9 @@ function lobbyView(lobby, userId) {
 module.exports = {
   CAPTIONS, VALID_BUFFS, STAFF_ROLES, STAFF_LABELS, STAFF_TIERS, STAFF_BASE_SALARIES,
   FACILITIES, SPONSORS, FOOD_PLANS, TOUR_PLANS, TRAINING_PLANS, TOUR_SCHEDULE, SECTION_TARGETS,
-  STARTING_BUDGET, MAX_FUNDRAISERS, FUNDRAISERS,
+  STARTING_BUDGET, MAX_FUNDRAISERS, FUNDRAISERS, STAFF_MARKET_REFRESH_COST,
   createLobby, addPlayerToLobby, createCorps, applyAction, readyChecklist, isCorpsReady,
-  readyNeeded, startSeason, advanceSeason, chooseEvent, captionTotals, lobbyView, ordinal,
+  readyNeeded, startSeason, advanceSeason, startNextSeason, createSeasonArchive, chooseEvent, captionTotals, lobbyView, ordinal,
   clamp, safeText, normalizeCorps, normalizeLobby, fundraiserOptions, budgetSummary, projectedWeeklyCost,
+  generateStaffMarket, ensureStaffMarket, fanRecruitingBonus, retainedStaffRenewalCost,
 };
