@@ -1,10 +1,14 @@
-# Security notes
+# Security and multiplayer state
 
-The uploaded Discord bot source contained a bot token directly in the Python file. Treat that token as compromised:
+- Passwords use Node.js `scrypt` with a unique salt.
+- Authentication uses HTTP-only, SameSite cookies.
+- Production cookies can be forced secure with `COOKIE_SECURE=1`.
+- Login attempts are rate-limited in memory.
+- All game rules and private state live on the server.
+- Other players receive only public corps identity, readiness, and score data.
+- Every corps has an independent revision number.
+- Mutations use optimistic revision checks, action IDs, cloned state, and per-lobby serialization.
+- Lobby deletion is restricted to the account that created the lobby.
+- JSON writes are atomic within one server process.
 
-1. Regenerate/reset it in the Discord Developer Portal.
-2. Remove it from every code copy and Git history.
-3. Load the replacement from an environment variable such as `DISCORD_BOT_TOKEN`.
-4. Never send the token to the browser or commit it to a repository.
-
-This web project stores password hashes using Node's `scrypt`, issues HttpOnly SameSite session cookies, and sends only public opponent summaries to each lobby member. For HTTPS hosting, set `COOKIE_SECURE=1`.
+Run only one Railway replica while using the included JSON storage layer. A multi-replica deployment requires replacing `storage.js` with a shared transactional database.

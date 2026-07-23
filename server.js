@@ -19,14 +19,13 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const store = new JsonStore(DATA_FILE);
 const sseClients = new Map();
 const loginAttempts = new Map();
+const lobbyLocks = new Map();
 
-let upgradedSavedCorps = false;
+let upgradedSavedData = false;
 for (const lobby of Object.values(store.data.lobbies)) {
-  for (const player of Object.values(lobby.players || {})) {
-    if (game.normalizeCorps(player.corps, { season: lobby.season, status: lobby.status })) upgradedSavedCorps = true;
-  }
+  if (game.normalizeLobby(lobby)) upgradedSavedData = true;
 }
-if (upgradedSavedCorps) store.save();
+if (upgradedSavedData) store.save();
 
 function healthPayload() {
   return {
@@ -134,13 +133,36 @@ function getLobbyForUser(lobbyId, user) {
   return lobby;
 }
 
-function broadcastLobby(lobbyId, event = 'refresh') {
+function broadcastLobby(lobbyId, event = 'refresh', data = {}) {
   const clients = sseClients.get(lobbyId);
   if (!clients) return;
-  const payload = `event: ${event}\ndata: ${JSON.stringify({ lobbyId, at: Date.now() })}\n\n`;
+  const payload = `event: ${event}\ndata: ${JSON.stringify({ lobbyId, at: Date.now(), ...data })}\n\n`;
   for (const res of [...clients]) {
     try { res.write(payload); }
     catch { clients.delete(res); }
+  }
+}
+
+function closeLobbyClients(lobbyId) {
+  const clients = sseClients.get(lobbyId);
+  if (!clients) return;
+  for (const res of [...clients]) {
+    try { res.end(); } catch {}
+  }
+  sseClients.delete(lobbyId);
+}
+
+async function withLobbyLock(lobbyId, callback) {
+  const previous = lobbyLocks.get(lobbyId) || Promise.resolve();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const chain = previous.then(() => gate);
+  lobbyLocks.set(lobbyId, chain);
+  await previous;
+  try { return await callback(); }
+  finally {
+    release();
+    if (lobbyLocks.get(lobbyId) === chain) lobbyLocks.delete(lobbyId);
   }
 }
 
@@ -181,7 +203,7 @@ function serveStatic(res, pathname) {
     'Content-Length': stat.size,
     'Cache-Control': ext === '.html' ? 'no-store' : 'public, max-age=300',
     'X-Content-Type-Options': 'nosniff',
-    'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+    'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
   });
   fs.createReadStream(filePath).pipe(res);
   return true;
@@ -256,8 +278,11 @@ async function handleApi(req, res, url) {
   if (method === 'GET' && pathname === '/api/meta') {
     return json(res, 200, {
       captions: game.CAPTIONS, buffs: game.VALID_BUFFS, staffRoles: game.STAFF_ROLES,
-      staffLabels: game.STAFF_LABELS, facilities: game.FACILITIES, sectionTargets: game.SECTION_TARGETS,
-      fundraisers: game.FUNDRAISERS, startingBudget: game.STARTING_BUDGET, maxFundraisers: game.MAX_FUNDRAISERS,
+      staffLabels: game.STAFF_LABELS, staffTiers: game.STAFF_TIERS, staffBaseSalaries: game.STAFF_BASE_SALARIES,
+      facilities: game.FACILITIES, sponsors: game.SPONSORS, foodPlans: game.FOOD_PLANS,
+      tourPlans: game.TOUR_PLANS, trainingPlans: game.TRAINING_PLANS, tourSchedule: game.TOUR_SCHEDULE,
+      sectionTargets: game.SECTION_TARGETS, fundraisers: game.FUNDRAISERS,
+      startingBudget: game.STARTING_BUDGET, maxFundraisers: game.MAX_FUNDRAISERS,
       minPlayers: Number(process.env.MIN_PLAYERS || 2),
     });
   }
@@ -270,7 +295,7 @@ async function handleApi(req, res, url) {
         id: lobby.id, code: lobby.code, name: lobby.name, status: lobby.status,
         season: lobby.season, week: lobby.week, phase: lobby.phase,
         players: Object.keys(lobby.players).length, isHost: lobby.hostUserId === user.id,
-        updatedAt: lobby.updatedAt,
+        updatedAt: lobby.updatedAt, revision: lobby.revision || 0,
       }));
     return json(res, 200, { lobbies });
   }
@@ -304,56 +329,107 @@ async function handleApi(req, res, url) {
     if (method === 'GET' && !operation) return json(res, 200, { lobby: game.lobbyView(lobby, user.id) });
     if (method === 'GET' && operation === 'events') return registerSse(req, res, lobbyId, user);
 
+    if (method === 'DELETE' && !operation) {
+      if (lobby.hostUserId !== user.id) return json(res, 403, { error: 'Only the lobby creator can delete this lobby.' });
+      return withLobbyLock(lobbyId, async () => {
+        const current = store.data.lobbies[lobbyId];
+        if (!current) return json(res, 404, { error: 'Lobby not found.' });
+        if (current.hostUserId !== user.id) return json(res, 403, { error: 'Only the lobby creator can delete this lobby.' });
+        broadcastLobby(lobbyId, 'deleted', { name: current.name });
+        delete store.data.lobbies[lobbyId];
+        store.save();
+        setTimeout(() => closeLobbyClients(lobbyId), 25).unref();
+        return json(res, 200, { ok: true });
+      });
+    }
+
     if (method === 'POST' && operation === 'action') {
-      if (lobby.status !== 'setup') return json(res, 409, { error: 'Preseason actions are locked after the season starts.' });
       const body = await readJson(req);
-      const player = lobby.players[user.id];
-      game.applyAction(player.corps, body.action, body.payload || {}, `${lobby.id}:${lobby.season}`);
-      player.ready = false;
-      lobby.updatedAt = new Date().toISOString();
-      store.save();
-      broadcastLobby(lobby.id);
-      return json(res, 200, { lobby: game.lobbyView(lobby, user.id) });
+      return withLobbyLock(lobbyId, async () => {
+        const current = getLobbyForUser(lobbyId, user);
+        if (current.status !== 'setup') return json(res, 409, { error: 'Preseason actions are locked after the season starts.', lobby: game.lobbyView(current, user.id) });
+        const player = current.players[user.id];
+        const nextCorps = structuredClone(player.corps);
+        try {
+          game.applyAction(nextCorps, body.action, body.payload || {}, `${current.id}:${current.season}`, {
+            actionId: String(body.actionId || ''), expectedRevision: body.expectedRevision,
+          });
+        } catch (error) {
+          if (error.code === 'REVISION_CONFLICT') return json(res, 409, { error: error.message, lobby: game.lobbyView(current, user.id) });
+          throw error;
+        }
+        player.corps = nextCorps;
+        player.ready = false;
+        current.revision = Number(current.revision || 0) + 1;
+        current.updatedAt = new Date().toISOString();
+        store.save();
+        broadcastLobby(current.id);
+        return json(res, 200, { lobby: game.lobbyView(current, user.id) });
+      });
     }
 
     if (method === 'POST' && operation === 'ready') {
-      if (lobby.status !== 'setup') return json(res, 409, { error: 'Readiness is locked after the season starts.' });
-      const player = lobby.players[user.id];
       const body = await readJson(req);
-      const ready = Boolean(body.ready);
-      if (ready && !game.isCorpsReady(player.corps)) return json(res, 409, { error: 'Complete every preseason checklist item first.' });
-      player.ready = ready;
-      lobby.updatedAt = new Date().toISOString();
-      store.save();
-      broadcastLobby(lobby.id);
-      return json(res, 200, { lobby: game.lobbyView(lobby, user.id) });
+      return withLobbyLock(lobbyId, async () => {
+        const current = getLobbyForUser(lobbyId, user);
+        if (current.status !== 'setup') return json(res, 409, { error: 'Readiness is locked after the season starts.' });
+        const player = current.players[user.id];
+        const ready = Boolean(body.ready);
+        if (ready && !game.isCorpsReady(player.corps)) return json(res, 409, { error: 'Complete every preseason checklist item first.', lobby: game.lobbyView(current, user.id) });
+        player.ready = ready;
+        current.revision = Number(current.revision || 0) + 1;
+        current.updatedAt = new Date().toISOString();
+        store.save();
+        broadcastLobby(current.id);
+        return json(res, 200, { lobby: game.lobbyView(current, user.id) });
+      });
     }
 
     if (method === 'POST' && operation === 'start') {
-      if (lobby.hostUserId !== user.id) return json(res, 403, { error: 'Only the lobby host can start the season.' });
       const body = await readJson(req);
-      game.startSeason(lobby, Boolean(body.force));
-      store.save();
-      broadcastLobby(lobby.id, 'season');
-      return json(res, 200, { lobby: game.lobbyView(lobby, user.id) });
+      return withLobbyLock(lobbyId, async () => {
+        const current = getLobbyForUser(lobbyId, user);
+        if (current.hostUserId !== user.id) return json(res, 403, { error: 'Only the lobby host can start the season.' });
+        game.startSeason(current, Boolean(body.force));
+        store.save();
+        broadcastLobby(current.id, 'season');
+        return json(res, 200, { lobby: game.lobbyView(current, user.id) });
+      });
     }
 
     if (method === 'POST' && operation === 'advance') {
-      if (lobby.hostUserId !== user.id) return json(res, 403, { error: 'Only the lobby host can advance the season.' });
-      game.advanceSeason(lobby);
-      store.save();
-      broadcastLobby(lobby.id, 'season');
-      return json(res, 200, { lobby: game.lobbyView(lobby, user.id) });
+      return withLobbyLock(lobbyId, async () => {
+        const current = getLobbyForUser(lobbyId, user);
+        if (current.hostUserId !== user.id) return json(res, 403, { error: 'Only the lobby host can advance the season.' });
+        game.advanceSeason(current);
+        store.save();
+        broadcastLobby(current.id, 'season');
+        return json(res, 200, { lobby: game.lobbyView(current, user.id) });
+      });
     }
 
     if (method === 'POST' && operation === 'event-choice') {
-      if (lobby.status !== 'running' || lobby.phase !== 'choices') return json(res, 409, { error: 'Event choices are not open.' });
       const body = await readJson(req);
-      game.chooseEvent(lobby.players[user.id].corps, String(body.eventId || ''), String(body.choiceId || ''));
-      lobby.updatedAt = new Date().toISOString();
-      store.save();
-      broadcastLobby(lobby.id);
-      return json(res, 200, { lobby: game.lobbyView(lobby, user.id) });
+      return withLobbyLock(lobbyId, async () => {
+        const current = getLobbyForUser(lobbyId, user);
+        if (current.status !== 'running' || current.phase !== 'choices') return json(res, 409, { error: 'Event choices are not open.', lobby: game.lobbyView(current, user.id) });
+        const player = current.players[user.id];
+        const nextCorps = structuredClone(player.corps);
+        try {
+          game.chooseEvent(nextCorps, String(body.eventId || ''), String(body.choiceId || ''), {
+            actionId: String(body.actionId || ''), expectedRevision: body.expectedRevision,
+          });
+        } catch (error) {
+          if (error.code === 'REVISION_CONFLICT') return json(res, 409, { error: error.message, lobby: game.lobbyView(current, user.id) });
+          throw error;
+        }
+        player.corps = nextCorps;
+        current.revision = Number(current.revision || 0) + 1;
+        current.updatedAt = new Date().toISOString();
+        store.save();
+        broadcastLobby(current.id);
+        return json(res, 200, { lobby: game.lobbyView(current, user.id) });
+      });
     }
   }
 
